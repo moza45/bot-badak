@@ -10,7 +10,10 @@
     "@whiskeysockets/baileys": "^6.7.0",
     "qrcode": "^1.5.3",
     "pino": "^8.0.0",
-    "sqlite3": "^5.1.7",
+    "better-sqlite3": "^9.4.3",
     "dotenv": "^16.0.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
