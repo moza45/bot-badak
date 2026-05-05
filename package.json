@@ -4,15 +4,14 @@
   "description": "WA Kicker Bot",
   "main": "bot_badak.js",
   "scripts": {
-    "start": "node bot_badak.js",
-    "postinstall": "npm rebuild sqlite3"
+    "start": "node bot_badak.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.5",
+    "better-sqlite3": "^9.4.3",
     "dotenv": "^16.3.1",
     "pino": "^8.17.2",
     "qrcode": "^1.5.3",
-    "sqlite3": "^5.1.7",
     "telegraf": "^4.15.3"
   },
   "engines": {
