@@ -1,0 +1,21 @@
+{
+  "name": "bot-badak",
+  "version": "5.1.0",
+  "description": "Ultimate WhatsApp Group Kicker Bot - GODMODE EDITION",
+  "main": "bot_badak.js",
+  "scripts": {
+    "start": "node bot_badak.js",
+    "dev": "nodemon bot_badak.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.5",
+    "dotenv": "^16.3.1",
+    "pino": "^8.17.2",
+    "qrcode": "^1.5.3",
+    "sqlite3": "^5.1.7",
+    "telegraf": "^4.15.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
