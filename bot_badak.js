@@ -12,8 +12,6 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const http = require('http');
-const sqlite3 = require('better-sqlite3');
-
 // ╔══════════════════════════════════════════════════════════════╗
 // ║         W A - K I C K E R   B O T   v 5 . 1 . 0            ║
 // ║      G O D M O D E   E D I T I O N   (FULL FIXED)          ║
@@ -63,107 +61,76 @@ const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || './data';
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const AUTH_BASE_FOLDER = path.join(DATA_DIR, 'auth_states');
-const DB_PATH = path.join(DATA_DIR, 'bot_data.db');
 
 if (!fs.existsSync(AUTH_BASE_FOLDER)) fs.mkdirSync(AUTH_BASE_FOLDER, { recursive: true });
 
-// ========== DATABASE SQLITE (FIX RACE CONDITION) ==========
+// ========== DATABASE JSON (PURE JS - NO COMPILE NEEDED) ==========
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
+const PAYMENTS_FILE = path.join(DATA_DIR, 'payments.json');
 
-    // ========== DATABASE BETTER-SQLITE3 (RAILWAY FRIENDLY) ==========
-const Database = require('better-sqlite3');
+function readJSON(filePath, defaultVal = {}) {
+    try {
+        if (!fs.existsSync(filePath)) return defaultVal;
+        return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    } catch (e) { return defaultVal; }
+}
+
+function writeJSON(filePath, data) {
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+}
 
 class UserDatabase {
-    constructor(dbPath = DB_PATH) {
-        this.dbPath = dbPath;
-        this.db = null;
-        this.init();
-    }
-
-    init() {
-        this.db = new Database(this.dbPath);
-        this.db.pragma('journal_mode = WAL');
-        
-        this.db.exec(`
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY,
-                username TEXT,
-                firstName TEXT,
-                lastName TEXT,
-                role TEXT CHECK(role IN ('regular', 'trial', 'admin')),
-                expiresAt TEXT,
-                trialExpiresAt TEXT,
-                hadTrial INTEGER DEFAULT 0,
-                lastPackage TEXT,
-                createdAt TEXT,
-                updatedAt TEXT,
-                notifiedExpiry INTEGER DEFAULT 0
-            )
-        `);
-        
-        this.db.exec(`
-            CREATE TABLE IF NOT EXISTS pending_payment (
-                id INTEGER PRIMARY KEY,
-                username TEXT,
-                firstName TEXT,
-                lastName TEXT,
-                packageKey TEXT,
-                requestedAt TEXT
-            )
-        `);
-    }
-
     getUser(userId) {
-        const stmt = this.db.prepare(`SELECT * FROM users WHERE id = ?`);
-        return stmt.get(userId);
+        const users = readJSON(USERS_FILE, {});
+        const u = users[String(userId)];
+        return u || null;
     }
 
     saveUser(user) {
-        const stmt = this.db.prepare(`
-            INSERT OR REPLACE INTO users 
-            (id, username, firstName, lastName, role, expiresAt, trialExpiresAt, hadTrial, lastPackage, createdAt, updatedAt, notifiedExpiry)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-        return stmt.run(
-            user.id, user.username || null, user.firstName || '', user.lastName || '',
-            user.role, user.expiresAt || null, user.trialExpiresAt || null,
-            user.hadTrial ? 1 : 0, user.lastPackage || null,
-            user.createdAt || new Date().toISOString(), user.updatedAt || new Date().toISOString(),
-            user.notifiedExpiry ? 1 : 0
-        );
+        const users = readJSON(USERS_FILE, {});
+        users[String(user.id)] = {
+            ...user,
+            hadTrial: user.hadTrial ? 1 : 0,
+            notifiedExpiry: user.notifiedExpiry ? 1 : 0,
+            updatedAt: new Date().toISOString()
+        };
+        writeJSON(USERS_FILE, users);
     }
 
     getAllUsers() {
-        const stmt = this.db.prepare(`SELECT * FROM users`);
-        return stmt.all() || [];
+        const users = readJSON(USERS_FILE, {});
+        return Object.values(users);
     }
 
     deleteUser(userId) {
-        const stmt = this.db.prepare(`DELETE FROM users WHERE id = ?`);
-        return stmt.run(userId);
+        const users = readJSON(USERS_FILE, {});
+        delete users[String(userId)];
+        writeJSON(USERS_FILE, users);
     }
 
     getAllPendingPayments() {
-        const stmt = this.db.prepare(`SELECT * FROM pending_payment`);
-        return stmt.all() || [];
+        const payments = readJSON(PAYMENTS_FILE, {});
+        return Object.values(payments);
     }
 
     addPendingPayment(payment) {
-        const stmt = this.db.prepare(`
-            INSERT OR REPLACE INTO pending_payment 
-            (id, username, firstName, lastName, packageKey, requestedAt)
-            VALUES (?, ?, ?, ?, ?, ?)
-        `);
-        return stmt.run(payment.id, payment.username || null, payment.firstName || '', payment.lastName || '', payment.packageKey, payment.requestedAt);
+        const payments = readJSON(PAYMENTS_FILE, {});
+        payments[String(payment.id)] = payment;
+        writeJSON(PAYMENTS_FILE, payments);
     }
 
     removePendingPayment(userId) {
-        const stmt = this.db.prepare(`DELETE FROM pending_payment WHERE id = ?`);
-        return stmt.run(userId);
+        const payments = readJSON(PAYMENTS_FILE, {});
+        delete payments[String(userId)];
+        writeJSON(PAYMENTS_FILE, payments);
     }
 
     updateNotifiedFlag(userId) {
-        const stmt = this.db.prepare(`UPDATE users SET notifiedExpiry = 1 WHERE id = ?`);
-        return stmt.run(userId);
+        const users = readJSON(USERS_FILE, {});
+        if (users[String(userId)]) {
+            users[String(userId)].notifiedExpiry = 1;
+            writeJSON(USERS_FILE, users);
+        }
     }
 }
 const db = new UserDatabase();
