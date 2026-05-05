@@ -1,20 +1,16 @@
 {
-  "name": "bot-badak",
-  "version": "5.1.0",
-  "description": "WA Kicker Bot",
+  "name": "wa-kicker-bot",
+  "version": "1.0.0",
   "main": "bot_badak.js",
   "scripts": {
     "start": "node bot_badak.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.5",
-    "better-sqlite3": "^9.4.3",
-    "dotenv": "^16.3.1",
-    "pino": "^8.17.2",
+    "telegraf": "^4.16.3",
+    "@whiskeysockets/baileys": "^6.7.0",
     "qrcode": "^1.5.3",
-    "telegraf": "^4.15.3"
-  },
-  "engines": {
-    "node": ">=18.0.0"
+    "pino": "^8.0.0",
+    "sqlite3": "^5.1.7",
+    "dotenv": "^16.0.0"
   }
 }
