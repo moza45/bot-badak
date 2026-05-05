@@ -2,7 +2,7 @@
   builder = "nixpacks"
 
 [build.nixpacks]
-  nixPkgs = ["nodejs_20", "python3", "make", "gcc"]
+  nixPkgs = ["nodejs_20"]
 
 [deploy]
   startCommand = "node bot_badak.js"
