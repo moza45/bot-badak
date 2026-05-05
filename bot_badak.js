@@ -1727,6 +1727,15 @@ setInterval(async () => {
 const PORT = process.env.PORT || 8080;
 http.createServer((req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
+    
+    // Public endpoint untuk Railway healthcheck
+    if (url.pathname === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok' }));
+        return;
+    }
+    
+    // Endpoint lama tetap pakai API key
     const apiKey = url.searchParams.get('key');
     if (apiKey !== HEALTH_API_KEY) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -1743,7 +1752,6 @@ http.createServer((req, res) => {
     }));
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`🌐 Health check aktif di port ${PORT}`);
-    console.log(`🔑 Health API Key: ${HEALTH_API_KEY}`);
 });
 
 // ========== LAUNCH ==========
