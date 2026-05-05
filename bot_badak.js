@@ -68,6 +68,10 @@ const DB_PATH = path.join(DATA_DIR, 'bot_data.db');
 if (!fs.existsSync(AUTH_BASE_FOLDER)) fs.mkdirSync(AUTH_BASE_FOLDER, { recursive: true });
 
 // ========== DATABASE SQLITE (FIX RACE CONDITION) ==========
+
+    // ========== DATABASE BETTER-SQLITE3 (RAILWAY FRIENDLY) ==========
+const Database = require('better-sqlite3');
+
 class UserDatabase {
     constructor(dbPath = DB_PATH) {
         this.dbPath = dbPath;
@@ -76,9 +80,10 @@ class UserDatabase {
     }
 
     init() {
-        this.db = new sqlite3.Database(this.dbPath);
-        this.db.run(`PRAGMA journal_mode = WAL`);
-        this.db.run(`
+        this.db = new Database(this.dbPath);
+        this.db.pragma('journal_mode = WAL');
+        
+        this.db.exec(`
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY,
                 username TEXT,
@@ -94,7 +99,8 @@ class UserDatabase {
                 notifiedExpiry INTEGER DEFAULT 0
             )
         `);
-        this.db.run(`
+        
+        this.db.exec(`
             CREATE TABLE IF NOT EXISTS pending_payment (
                 id INTEGER PRIMARY KEY,
                 username TEXT,
@@ -107,92 +113,59 @@ class UserDatabase {
     }
 
     getUser(userId) {
-        return new Promise((resolve, reject) => {
-            this.db.get(`SELECT * FROM users WHERE id = ?`, [userId], (err, row) => {
-                if (err) reject(err);
-                else resolve(row);
-            });
-        });
+        const stmt = this.db.prepare(`SELECT * FROM users WHERE id = ?`);
+        return stmt.get(userId);
     }
 
     saveUser(user) {
-        return new Promise((resolve, reject) => {
-            this.db.run(`
-                INSERT OR REPLACE INTO users 
-                (id, username, firstName, lastName, role, expiresAt, trialExpiresAt, hadTrial, lastPackage, createdAt, updatedAt, notifiedExpiry)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `, [
-                user.id, user.username || null, user.firstName || '', user.lastName || '',
-                user.role, user.expiresAt || null, user.trialExpiresAt || null,
-                user.hadTrial ? 1 : 0, user.lastPackage || null,
-                user.createdAt || new Date().toISOString(), user.updatedAt || new Date().toISOString(),
-                user.notifiedExpiry ? 1 : 0
-            ], (err) => {
-                if (err) reject(err);
-                else resolve();
-            });
-        });
+        const stmt = this.db.prepare(`
+            INSERT OR REPLACE INTO users 
+            (id, username, firstName, lastName, role, expiresAt, trialExpiresAt, hadTrial, lastPackage, createdAt, updatedAt, notifiedExpiry)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        return stmt.run(
+            user.id, user.username || null, user.firstName || '', user.lastName || '',
+            user.role, user.expiresAt || null, user.trialExpiresAt || null,
+            user.hadTrial ? 1 : 0, user.lastPackage || null,
+            user.createdAt || new Date().toISOString(), user.updatedAt || new Date().toISOString(),
+            user.notifiedExpiry ? 1 : 0
+        );
     }
 
     getAllUsers() {
-        return new Promise((resolve, reject) => {
-            this.db.all(`SELECT * FROM users`, (err, rows) => {
-                if (err) reject(err);
-                else resolve(rows || []);
-            });
-        });
+        const stmt = this.db.prepare(`SELECT * FROM users`);
+        return stmt.all() || [];
     }
 
     deleteUser(userId) {
-        return new Promise((resolve, reject) => {
-            this.db.run(`DELETE FROM users WHERE id = ?`, [userId], (err) => {
-                if (err) reject(err);
-                else resolve();
-            });
-        });
+        const stmt = this.db.prepare(`DELETE FROM users WHERE id = ?`);
+        return stmt.run(userId);
     }
 
     getAllPendingPayments() {
-        return new Promise((resolve, reject) => {
-            this.db.all(`SELECT * FROM pending_payment`, (err, rows) => {
-                if (err) reject(err);
-                else resolve(rows || []);
-            });
-        });
+        const stmt = this.db.prepare(`SELECT * FROM pending_payment`);
+        return stmt.all() || [];
     }
 
     addPendingPayment(payment) {
-        return new Promise((resolve, reject) => {
-            this.db.run(`
-                INSERT OR REPLACE INTO pending_payment 
-                (id, username, firstName, lastName, packageKey, requestedAt)
-                VALUES (?, ?, ?, ?, ?, ?)
-            `, [payment.id, payment.username || null, payment.firstName || '', payment.lastName || '', payment.packageKey, payment.requestedAt], (err) => {
-                if (err) reject(err);
-                else resolve();
-            });
-        });
+        const stmt = this.db.prepare(`
+            INSERT OR REPLACE INTO pending_payment 
+            (id, username, firstName, lastName, packageKey, requestedAt)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `);
+        return stmt.run(payment.id, payment.username || null, payment.firstName || '', payment.lastName || '', payment.packageKey, payment.requestedAt);
     }
 
     removePendingPayment(userId) {
-        return new Promise((resolve, reject) => {
-            this.db.run(`DELETE FROM pending_payment WHERE id = ?`, [userId], (err) => {
-                if (err) reject(err);
-                else resolve();
-            });
-        });
+        const stmt = this.db.prepare(`DELETE FROM pending_payment WHERE id = ?`);
+        return stmt.run(userId);
     }
 
     updateNotifiedFlag(userId) {
-        return new Promise((resolve, reject) => {
-            this.db.run(`UPDATE users SET notifiedExpiry = 1 WHERE id = ?`, [userId], (err) => {
-                if (err) reject(err);
-                else resolve();
-            });
-        });
+        const stmt = this.db.prepare(`UPDATE users SET notifiedExpiry = 1 WHERE id = ?`);
+        return stmt.run(userId);
     }
 }
-
 const db = new UserDatabase();
 
 // ========== LOGGER (FIX SILENT CATCH) ==========
