@@ -53,8 +53,7 @@ const PACKAGES = {
     '1bulan':  { label: '1 Bulan',  days: 30,  price: parseInt(process.env.PRICE_1BULAN  || '50000')  },
     '3bulan':  { label: '3 Bulan',  days: 90,  price: parseInt(process.env.PRICE_3BULAN  || '125000') },
     '6bulan':  { label: '6 Bulan',  days: 180, price: parseInt(process.env.PRICE_6BULAN  || '200000') },
-    '1tahun':  { label: '1 Tahun',  days: 365, price: parseInt(process.env.PRICE_1TAHUN  || '350000') },
-};
+    '1tahun':  { label: '1 Tahun',  days: 365, price: parseInt(process.env.PRICE_1TAHUN  || '350000') } };
 
 // ========== PERSISTENT STORAGE UNTUK RAILWAY ==========
 const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || './data';
@@ -81,13 +80,13 @@ function writeJSON(filePath, data) {
 
 class UserDatabase {
     getUser(userId) {
-        const users = readJSON(USERS_FILE, {});
+        const users = readJSON(USERS_FILE);
         const u = users[String(userId)];
         return u || null;
     }
 
     saveUser(user) {
-        const users = readJSON(USERS_FILE, {});
+        const users = readJSON(USERS_FILE);
         users[String(user.id)] = {
             ...user,
             hadTrial: user.hadTrial ? 1 : 0,
@@ -98,35 +97,35 @@ class UserDatabase {
     }
 
     getAllUsers() {
-        const users = readJSON(USERS_FILE, {});
+        const users = readJSON(USERS_FILE);
         return Object.values(users);
     }
 
     deleteUser(userId) {
-        const users = readJSON(USERS_FILE, {});
+        const users = readJSON(USERS_FILE);
         delete users[String(userId)];
         writeJSON(USERS_FILE, users);
     }
 
     getAllPendingPayments() {
-        const payments = readJSON(PAYMENTS_FILE, {});
+        const payments = readJSON(PAYMENTS_FILE);
         return Object.values(payments);
     }
 
     addPendingPayment(payment) {
-        const payments = readJSON(PAYMENTS_FILE, {});
+        const payments = readJSON(PAYMENTS_FILE);
         payments[String(payment.id)] = payment;
         writeJSON(PAYMENTS_FILE, payments);
     }
 
     removePendingPayment(userId) {
-        const payments = readJSON(PAYMENTS_FILE, {});
+        const payments = readJSON(PAYMENTS_FILE);
         delete payments[String(userId)];
         writeJSON(PAYMENTS_FILE, payments);
     }
 
     updateNotifiedFlag(userId) {
-        const users = readJSON(USERS_FILE, {});
+        const users = readJSON(USERS_FILE);
         if (users[String(userId)]) {
             users[String(userId)].notifiedExpiry = 1;
             writeJSON(USERS_FILE, users);
@@ -160,6 +159,74 @@ const CONFLICT_COOLDOWN_MS = 35000;
 const MAX_RECONNECT_ATTEMPTS = 3;
 const MAX_CONCURRENT_SESSIONS = 50;
 const SESSION_IDLE_MS = 4 * 60 * 60 * 1000;
+
+// ========== RATE LIMITER ==========
+const rateLimitMap = new Map();
+const RATE_LIMIT_WINDOW_MS = 5000;
+const RATE_LIMIT_MAX = 5;
+
+function isRateLimited(userId) {
+    const now = Date.now();
+    const entry = rateLimitMap.get(userId) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
+    if (now > entry.resetAt) {
+        entry.count = 1;
+        entry.resetAt = now + RATE_LIMIT_WINDOW_MS;
+    } else {
+        entry.count++;
+    }
+    rateLimitMap.set(userId, entry);
+    return entry.count > RATE_LIMIT_MAX;
+}
+
+// ========== SAFE REPLY (FIX MARKDOWN CRASH) ==========
+async function safeReply(ctx, text, opts = {}) {
+    try {
+        return await ctx.reply(text, opts);
+    } catch (err) {
+        if (err.message && (err.message.includes("parse entities") || err.message.includes("Bad Request"))) {
+            const { parse_mode, ...safeOpts } = opts;
+            try {
+                return await ctx.reply(text.replace(/[*_`[\]()~>#+=|{}.!\\-]/g, "\\$&"), { ...safeOpts });
+            } catch (err2) {
+                return await ctx.reply(text.replace(/[*_`[\]()~>#+=|{}.!\\-]/g, ""), safeOpts);
+            }
+        }
+        log("WARN", "SafeReply", `Gagal kirim pesan: ${err.message}`);
+    }
+}
+
+// ========== MEMORY MONITOR ==========
+setInterval(() => {
+    const mem = process.memoryUsage();
+    const heapMB = Math.round(mem.heapUsed / 1024 / 1024);
+    const rssMB = Math.round(mem.rss / 1024 / 1024);
+    log("INFO", "Memory", `Heap: ${heapMB}MB | RSS: ${rssMB}MB | Sessions: ${userSessions.size}`);
+    if (heapMB > 400) log("WARN", "Memory", `Heap tinggi (${heapMB}MB)`);
+}, 30 * 60 * 1000);
+
+// ========== AUTO BACKUP JSON ==========
+const BACKUP_DIR = path.join(DATA_DIR, "backups");
+if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+
+function backupData() {
+    try {
+        const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        const usersFile = path.join(DATA_DIR, "users.json");
+        const paymentsFile = path.join(DATA_DIR, "payments.json");
+        if (fs.existsSync(usersFile)) fs.copyFileSync(usersFile, path.join(BACKUP_DIR, `users_${ts}.json`));
+        if (fs.existsSync(paymentsFile)) fs.copyFileSync(paymentsFile, path.join(BACKUP_DIR, `payments_${ts}.json`));
+        const files = fs.readdirSync(BACKUP_DIR).sort();
+        const userB = files.filter(f => f.startsWith("users_"));
+        const payB  = files.filter(f => f.startsWith("payments_"));
+        userB.slice(0, Math.max(0, userB.length - 24)).forEach(f => fs.unlinkSync(path.join(BACKUP_DIR, f)));
+        payB.slice(0, Math.max(0, payB.length - 24)).forEach(f => fs.unlinkSync(path.join(BACKUP_DIR, f)));
+        log("INFO", "Backup", `Backup berhasil: ${ts}`);
+    } catch (err) {
+        log("ERROR", "Backup", `Gagal backup: ${err.message}`, err);
+    }
+}
+setInterval(backupData, 60 * 60 * 1000);
+setTimeout(backupData, 5000);
 
 // ========== SESSION CLEANUP (FIX MEMORY LEAK) ==========
 setInterval(async () => {
@@ -512,7 +579,7 @@ const PULSE_FRAMES = ['🔴', '🟠', '🟡', '🟢', '🟡', '🟠'];
 async function liveMessage(ctx, initText, frameFn, interval = 900) {
     let msg;
     try {
-        msg = await ctx.reply(initText, { parse_mode: 'Markdown' });
+        msg = await ctx.reply(initText);
     } catch (err) {
         log('WARN', 'LiveMsg', `Gagal kirim pesan: ${err.message}`);
         return { stop: async () => {} };
@@ -523,7 +590,7 @@ async function liveMessage(ctx, initText, frameFn, interval = 900) {
         if (stopped) return;
         try {
             const text = frameFn(frame);
-            await ctx.telegram.editMessageText(msg.chat.id, msg.message_id, undefined, text, { parse_mode: 'Markdown' });
+            await ctx.telegram.editMessageText(msg.chat.id, msg.message_id, undefined, text);
         } catch (err) {
             // Abaikan error edit message (biasanya karena sudah dihapus)
         }
@@ -536,7 +603,7 @@ async function liveMessage(ctx, initText, frameFn, interval = 900) {
             clearInterval(timer);
             if (finalText) {
                 try {
-                    await ctx.telegram.editMessageText(msg.chat.id, msg.message_id, undefined, finalText, { parse_mode: 'Markdown' });
+                    await ctx.telegram.editMessageText(msg.chat.id, msg.message_id, undefined, finalText);
                 } catch (err) {
                     // Abaikan
                 }
@@ -573,7 +640,7 @@ async function liveKickProgress(ctx, total) {
 
 async function liveCountdown(ctx, totalMs, headerText, onDone) {
     const endTime = Date.now() + totalMs;
-    const anim = await liveMessage(ctx, `⏳ *${headerText}*\n\nMenghitung...`,
+    const anim = await liveMessage(ctx, `⏳ ${headerText}\n\nMenghitung...`,
         (i) => {
             const left = Math.max(0, endTime - Date.now());
             const sisa = Math.ceil(left / 1000);
@@ -582,10 +649,10 @@ async function liveCountdown(ctx, totalMs, headerText, onDone) {
             const menit = String(Math.floor(sisa / 60)).padStart(2, '0');
             const detik = String(sisa % 60).padStart(2, '0');
             const bar = buildProgressBar(totalMs - left, totalMs, 14);
-            return `${pulse} *${headerText}*\n\n${clock} Sisa waktu: \`${menit}:${detik}\`\n${bar}\n\n_WA server lagi ngelepas koneksi lama..._`;
+            return `${pulse} ${headerText}\n\n${clock} Sisa waktu: \`${menit}:${detik}\`\n${bar}\n\n_WA server lagi ngelepas koneksi lama..._`;
         }, 1000);
     setTimeout(async () => {
-        await anim.stop(`✅ *Cooldown selesai!*\n\nSilakan tekan *🔑 Login WhatsApp* lagi.`);
+        await anim.stop(`✅ Cooldown selesai!\n\nSilakan tekan 🔑 Login WhatsApp lagi.`);
         if (onDone) onDone();
     }, totalMs);
     return anim;
@@ -594,12 +661,12 @@ async function liveCountdown(ctx, totalMs, headerText, onDone) {
 async function liveConnecting(ctx) {
     const labels = ['Menyiapkan koneksi WA', 'Memuat auth session', 'Menghubungi server WA', 'Menunggu QR code'];
     let phase = 0;
-    return liveMessage(ctx, `${CLOCK_FRAMES[0]} *Menyambungkan ke WhatsApp...*`,
+    return liveMessage(ctx, `${CLOCK_FRAMES[0]} Menyambungkan ke WhatsApp...`,
         (i) => {
             if (i > 0 && i % 4 === 0 && phase < labels.length - 1) phase++;
             const spin = SPINNER_FRAMES[i % SPINNER_FRAMES.length];
             const clock = CLOCK_FRAMES[i % CLOCK_FRAMES.length];
-            return `${clock} *Menghubungkan ke WhatsApp*\n\n${spin} ${labels[phase]}...\n\n_QR code akan muncul sebentar lagi_`;
+            return `${clock} Menghubungkan ke WhatsApp\n\n${spin} ${labels[phase]}...\n\n_QR code akan muncul sebentar lagi_`;
         }, 700);
 }
 
@@ -615,14 +682,12 @@ async function sendQR(ctx, qr) {
         if (!sendAsText) {
             const qrBuffer = await QRCode.toBuffer(qr, { type: 'png', width: 1024, margin: 2, color: { dark: '#000000', light: '#FFFFFF' }, scale: 8 });
             await ctx.replyWithPhoto({ source: qrBuffer }, {
-                caption: `📱 *SCAN QR CODE DI WHATSAPP*\n\n1. Buka WhatsApp di HP\n2. Tap ⋮ (titik tiga) → *Perangkat Tertaut*\n3. Tap *Tautkan Perangkat*\n4. Scan QR code di atas\n\n_Kalo gagal scan, screenshot aja terus scan dari galeri_`,
-                parse_mode: 'Markdown'
-            });
+                caption: `📱 SCAN QR CODE DI WHATSAPP\n\n1. Buka WhatsApp di HP\n2. Tap ⋮ (titik tiga) → Perangkat Tertaut\n3. Tap Tautkan Perangkat\n4. Scan QR code di atas\n\n_Kalo gagal scan, screenshot aja terus scan dari galeri_`});
         } else {
-            await ctx.reply(`📱 *SCAN QR CODE MANUAL*\n\n1. Buka WhatsApp → Perangkat Tertaut\n2. Tautkan Perangkat\n3. Scan kode dibawah (screenshot):\n\n\`\`\`\n${qr}\n\`\`\``, { parse_mode: 'Markdown' });
+            await ctx.reply(`📱 SCAN QR CODE MANUAL\n\n1. Buka WhatsApp → Perangkat Tertaut\n2. Tautkan Perangkat\n3. Scan kode dibawah (screenshot):\n\n\`\`\`\n${qr}\n\`\`\``);
         }
     } catch (err) {
-        await ctx.reply(`📱 *SCAN QR CODE (Teks Backup)*\n\n\`\`\`\n${qr}\n\`\`\``, { parse_mode: 'Markdown' });
+        await ctx.reply(`📱 SCAN QR CODE (Teks Backup)\n\n\`\`\`\n${qr}\n\`\`\``);
     }
 }
 
@@ -676,15 +741,15 @@ async function startLogin(ctx, userId) {
     const cooldownUntil = conflictCooldowns.get(userId);
     if (cooldownUntil && Date.now() < cooldownUntil) {
         const sisaDetik = Math.ceil((cooldownUntil - Date.now()) / 1000);
-        return ctx.reply(`⏳ *Harap tunggu ${sisaDetik} detik lagi*\n\nWA server masih melepas koneksi sebelumnya.\n_(anti Stream Conflict aktif)_`, { parse_mode: 'Markdown' });
+        return ctx.reply(`⏳ Harap tunggu ${sisaDetik} detik lagi\n\nWA server masih melepas koneksi sebelumnya.\n_(anti Stream Conflict aktif)_`);
     }
     if (loginLocks.get(userId)) {
-        return ctx.reply(`⏳ *Proses login sedang berjalan*, harap tunggu...`, { parse_mode: 'Markdown' });
+        return ctx.reply(`⏳ Proses login sedang berjalan, harap tunggu...`);
     }
     loginLocks.set(userId, true);
     try {
         if (userSessions.has(userId)) {
-            await ctx.reply(`🔄 _Menutup koneksi lama..._`, { parse_mode: 'Markdown' });
+            await ctx.reply(`🔄 _Menutup koneksi lama..._`);
             await destroySession(userId);
         }
         const authFolder = getEncryptedAuthFolder(userId);
@@ -703,8 +768,7 @@ async function startLogin(ctx, userId) {
             version,
             generateHighQualityLinkPreview: false,
             printQRInTerminal: false,
-            shouldReconnect: () => false,
-        });
+            shouldReconnect: () => false });
         const session = {
             sock, saveCreds,
             qrTimer: null, reconnTimer: null,
@@ -727,7 +791,7 @@ async function startLogin(ctx, userId) {
                     session.qrTimer = setTimeout(async () => {
                         if (!session.loggedIn) {
                             session.qrBlocked = false;
-                            await ctx.reply(`⏱ *QR expired.* Ketik /refreshqr untuk QR baru.`, { parse_mode: 'Markdown' });
+                            await ctx.reply(`⏱ QR expired. Ketik /refreshqr untuk QR baru.`);
                         }
                     }, 60000);
                 }
@@ -745,7 +809,7 @@ async function startLogin(ctx, userId) {
                     reconnectAttempts.delete(userId);
                     conflictCooldowns.set(userId, Date.now() + CONFLICT_COOLDOWN_MS);
                     try { await connectAnim.stop(null); } catch (err) {}
-                    await ctx.reply(`⚠️ *Stream Conflict (515)*\n\nWA mendeteksi koneksi ganda dari device yang sama.\n\n*Penyebab umum:*\n• Bot di-restart terlalu cepat\n• Ada instance bot lain aktif\n• Session belum dilepas server WA`, { parse_mode: 'Markdown' });
+                    await ctx.reply(`⚠️ Stream Conflict (515)\n\nWA mendeteksi koneksi ganda dari device yang sama.\n\nPenyebab umum:\n• Bot di-restart terlalu cepat\n• Ada instance bot lain aktif\n• Session belum dilepas server WA`);
                     await liveCountdown(ctx, CONFLICT_COOLDOWN_MS, 'Cooldown Stream Conflict', () => { conflictCooldowns.delete(userId); });
                     return;
                 }
@@ -753,7 +817,7 @@ async function startLogin(ctx, userId) {
                     sock.ev.removeAllListeners();
                     userSessions.delete(userId);
                     reconnectAttempts.delete(userId);
-                    await ctx.reply(`🚫 *Session ditolak WhatsApp.*\n\nLogin ulang diperlukan.\nTekan *🔑 Login WhatsApp*`, { parse_mode: 'Markdown' });
+                    await ctx.reply(`🚫 Session ditolak WhatsApp.\n\nLogin ulang diperlukan.\nTekan 🔑 Login WhatsApp`);
                     return;
                 }
                 if (attempts <= MAX_RECONNECT_ATTEMPTS) {
@@ -762,7 +826,7 @@ async function startLogin(ctx, userId) {
                     const delaySec = Math.ceil(delayMs / 1000);
                     sock.ev.removeAllListeners();
                     userSessions.delete(userId);
-                    await ctx.reply(`🔌 Koneksi terputus (code: ${statusCode || '?'}).\n🔄 Reconnect otomatis dalam *${delaySec} detik...* (percobaan ${attempts}/${MAX_RECONNECT_ATTEMPTS})`, { parse_mode: 'Markdown' });
+                    await ctx.reply(`🔌 Koneksi terputus (code: ${statusCode || '?'}).\n🔄 Reconnect otomatis dalam ${delaySec} detik... (percobaan ${attempts}/${MAX_RECONNECT_ATTEMPTS})`);
                     session.reconnTimer = setTimeout(async () => {
                         try { await startLogin(ctx, userId); }
                         catch (e) { log('ERROR', 'Login', 'Auto-reconnect error', e); }
@@ -771,7 +835,7 @@ async function startLogin(ctx, userId) {
                     sock.ev.removeAllListeners();
                     userSessions.delete(userId);
                     reconnectAttempts.delete(userId);
-                    await ctx.reply(`❌ *Koneksi gagal setelah ${MAX_RECONNECT_ATTEMPTS}x percobaan.*\n\nTekan *🔑 Login WhatsApp* untuk coba manual.`, { parse_mode: 'Markdown' });
+                    await ctx.reply(`❌ Koneksi gagal setelah ${MAX_RECONNECT_ATTEMPTS}x percobaan.\n\nTekan 🔑 Login WhatsApp untuk coba manual.`);
                 }
             }
             if (connection === 'open') {
@@ -783,13 +847,13 @@ async function startLogin(ctx, userId) {
                 try { await sock.sendPresenceUpdate('available'); } catch (err) {}
                 startBackgroundActivitySpooler(sock, userId);
                 const kb = isAdmin(userId) ? KB_ADMIN_MAIN : KB_MAIN;
-                await ctx.reply(`✅ *LOGIN WHATSAPP BERHASIL!*\n\nPilih menu di keyboard bawah.`, { parse_mode: 'Markdown', ...kb });
+                await ctx.reply(`✅ LOGIN WHATSAPP BERHASIL!\n\nPilih menu di keyboard bawah.`, { ...kb });
             }
         });
         sock.ev.on('creds.update', () => { saveCreds(); });
     } catch (err) {
         log('ERROR', 'Login', `Gagal start login: ${err.message}`, err);
-        await ctx.reply(`❌ *Gagal login:* ${err.message}`, { parse_mode: 'Markdown' });
+        await ctx.reply(`❌ Gagal login: ${err.message}`);
     } finally {
         loginLocks.delete(userId);
     }
@@ -842,12 +906,12 @@ async function requireAccess(ctx, next) {
     const status = await getUserStatus(userId);
     if (status === 'regular' || status === 'trial') return next();
     if (status === 'expired') {
-        return ctx.reply(`╔${DIVIDER}╗\n║  AKSES BERAKHIR\n╚${DIVIDER}╝\n\nPaket lo sudah expired.\nPerpanjang sekarang!\n\nKetik /beli untuk lihat paket.`, { parse_mode: 'Markdown', ...KB_LANDING });
+        return ctx.reply(`╔${DIVIDER}╗\n║  AKSES BERAKHIR\n╚${DIVIDER}╝\n\nPaket lo sudah expired.\nPerpanjang sekarang!\n\nKetik /beli untuk lihat paket.`, { ...KB_LANDING });
     }
     if (status === 'trial_expired') {
-        return ctx.reply(`╔${DIVIDER}╗\n║  TRIAL BERAKHIR\n╚${DIVIDER}╝\n\nMasa trial lo sudah habis.\nUpgrade ke paket reguler!\n\nKetik /beli untuk lihat paket.`, { parse_mode: 'Markdown', ...KB_LANDING });
+        return ctx.reply(`╔${DIVIDER}╗\n║  TRIAL BERAKHIR\n╚${DIVIDER}╝\n\nMasa trial lo sudah habis.\nUpgrade ke paket reguler!\n\nKetik /beli untuk lihat paket.`, { ...KB_LANDING });
     }
-    await ctx.reply(`╔${DIVIDER}╗\n║  AKSES DITOLAK\n╚${DIVIDER}╝\n\nBot ini berbayar.\n\n🎁 Coba *gratis ${TRIAL_DURATION_HOURS} jam* → tekan tombol *Coba Gratis*\n💳 Atau langsung beli paket → tekan *⭐ Premium*`, { parse_mode: 'Markdown', ...KB_LANDING });
+    await ctx.reply(`╔${DIVIDER}╗\n║  AKSES DITOLAK\n╚${DIVIDER}╝\n\nBot ini berbayar.\n\n🎁 Coba gratis ${TRIAL_DURATION_HOURS} jam → tekan tombol Coba Gratis\n💳 Atau langsung beli paket → tekan ⭐ Premium`, { ...KB_LANDING });
 }
 
 // ========== GROUP & KICK MENU ==========
@@ -857,7 +921,7 @@ async function showGroupPicker(ctx, userId, session) {
         const chats = await session.sock.groupFetchAllParticipating();
         const groups = Object.values(chats);
         if (groups.length === 0) {
-            await fetchAnim.stop(`❌ *Tidak ada grup ditemukan.*`);
+            await fetchAnim.stop(`❌ Tidak ada grup ditemukan.`);
             return;
         }
         const isTrial = await isTrialOnly(userId);
@@ -873,9 +937,9 @@ async function showGroupPicker(ctx, userId, session) {
         let header = `╔${DIVIDER}╗\n║  PILIH GRUP\n╚${DIVIDER}╝\n\n`;
         if (isTrial) header += `⚠️ _Trial: hanya 1 grup_\n\n`;
         header += `Ketuk nama grup yang ingin dipilih:`;
-        await ctx.reply(header, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: buttons } });
+        await ctx.reply(header, { reply_markup: { inline_keyboard: buttons } });
     } catch (err) {
-        await fetchAnim.stop(`❌ *Error:* ${err.message}`);
+        await fetchAnim.stop(`❌ Error: ${err.message}`);
     }
 }
 
@@ -902,7 +966,7 @@ async function showKickMenu(ctx, userId, session) {
         }).map(p => ({ jid: p.id, name: p.id.split('@')[0] }));
         if (allMembers.length === 0) {
             await fetchAnim.stop(null);
-            return ctx.reply(`ℹ️ *Tidak ada anggota yang bisa dikick.*\n\nSemua anggota adalah admin.`, { parse_mode: 'Markdown' });
+            return ctx.reply(`ℹ️ Tidak ada anggota yang bisa dikick.\n\nSemua anggota adalah admin.`);
         }
         const members = allMembers.slice(0, KICK_LIMIT_PER_SESSION);
         const limited = allMembers.length > KICK_LIMIT_PER_SESSION;
@@ -911,9 +975,9 @@ async function showKickMenu(ctx, userId, session) {
         await fetchAnim.stop(null);
         let infoText = '';
         if (limited) infoText = `\n⚠️ _Ditampilkan ${KICK_LIMIT_PER_SESSION} dari ${allMembers.length} anggota (batas per sesi)_`;
-        await ctx.reply(`╔${DIVIDER}╗\n║  MENU KICK ANGGOTA\n╚${DIVIDER}╝\n\n🎯 Grup: *${session.groupName}*\n👥 Non-admin: *${members.length} orang*${infoText}\n\nKetuk nama untuk pilih/batal.\nTekan *Kick Terpilih* jika sudah siap.\n\n⚠️ _Aksi kick tidak bisa dibatalkan!_`, { parse_mode: 'Markdown', ...buildMemberKeyboard(members, kickSelections.get(userId)) });
+        await ctx.reply(`╔${DIVIDER}╗\n║  MENU KICK ANGGOTA\n╚${DIVIDER}╝\n\n🎯 Grup: ${session.groupName}\n👥 Non-admin: ${members.length} orang${infoText}\n\nKetuk nama untuk pilih/batal.\nTekan Kick Terpilih jika sudah siap.\n\n⚠️ _Aksi kick tidak bisa dibatalkan!_`, { ...buildMemberKeyboard(members, kickSelections.get(userId)) });
     } catch (err) {
-        await fetchAnim.stop(`❌ *Error:* ${err.message}`);
+        await fetchAnim.stop(`❌ Error: ${err.message}`);
     }
 }
 
@@ -974,11 +1038,11 @@ function parseVCF(vcfText) {
 async function addContactsToGroup(ctx, userId, contacts, groupId, groupName) {
     const session = userSessions.get(userId);
     if (!session || !session.loggedIn) {
-        return ctx.reply('❌ *Session WA berakhir.* Tekan *🔑 Login WhatsApp*.', { parse_mode: 'Markdown' });
+        return ctx.reply('❌ Session WA berakhir. Tekan 🔑 Login WhatsApp.');
     }
     const total = contacts.length;
     let berhasil = 0, gagal = 0, notWA = 0;
-    const statusMsg = await ctx.reply(`⏳ *Menambahkan ${total} kontak ke grup...*`, { parse_mode: 'Markdown' });
+    const statusMsg = await ctx.reply(`⏳ Menambahkan ${total} kontak ke grup...`);
     for (let i = 0; i < contacts.length; i++) {
         const c = contacts[i];
         try {
@@ -995,7 +1059,7 @@ async function addContactsToGroup(ctx, userId, contacts, groupId, groupName) {
             if (i + 1 < contacts.length) await humanDelayAdd();
             if ((i + 1) % 3 === 0 || i + 1 === total) {
                 try {
-                    await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, null, `⏳ Progres: ${i + 1}/${total}\n✅ Berhasil: ${berhasil} | 📵 No WA: ${notWA}`, { parse_mode: 'Markdown' });
+                    await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, null, `⏳ Progres: ${i + 1}/${total}\n✅ Berhasil: ${berhasil} | 📵 No WA: ${notWA}`);
                 } catch (err) {}
             }
         } catch (err) {
@@ -1004,8 +1068,8 @@ async function addContactsToGroup(ctx, userId, contacts, groupId, groupName) {
             await humanDelayError();
         }
     }
-    let hasil = `╔${DIVIDER}╗\n║  HASIL IMPORT VCF\n╚${DIVIDER}╝\n\n🎯 *Grup:* ${groupName}\n\n${DIVIDER_THIN}\n✅ *Berhasil ditambah:* ${berhasil} kontak\n📵 *Tidak punya WA:* ${notWA} kontak\n❌ *Error:* ${gagal} kontak\n`;
-    await ctx.reply(hasil, { parse_mode: 'Markdown' });
+    let hasil = `╔${DIVIDER}╗\n║  HASIL IMPORT VCF\n╚${DIVIDER}╝\n\n🎯 Grup: ${groupName}\n\n${DIVIDER_THIN}\n✅ Berhasil ditambah: ${berhasil} kontak\n📵 Tidak punya WA: ${notWA} kontak\n❌ Error: ${gagal} kontak\n`;
+    await ctx.reply(hasil);
     vcfPending.delete(userId);
 }
 
@@ -1017,10 +1081,20 @@ async function showPriceMenu(ctx) {
         [Markup.button.callback(`📦 6 Bulan — ${formatRupiah(PACKAGES['6bulan'].price)}`, 'buy_6bulan')],
         [Markup.button.callback(`🏆 1 Tahun — ${formatRupiah(PACKAGES['1tahun'].price)}`, 'buy_1tahun')],
     ]);
-    await ctx.reply(`╔${DIVIDER}╗\n║  PAKET HARGA\n╚${DIVIDER}╝\n\n📦 1 Bulan → ${formatRupiah(PACKAGES['1bulan'].price)}\n📦 3 Bulan → ${formatRupiah(PACKAGES['3bulan'].price)}\n📦 6 Bulan → ${formatRupiah(PACKAGES['6bulan'].price)}\n🏆 1 Tahun → ${formatRupiah(PACKAGES['1tahun'].price)}\n\nPilih paket di bawah:`, { parse_mode: 'Markdown', ...keyboard });
+    await ctx.reply(`╔${DIVIDER}╗\n║  PAKET HARGA\n╚${DIVIDER}╝\n\n📦 1 Bulan → ${formatRupiah(PACKAGES['1bulan'].price)}\n📦 3 Bulan → ${formatRupiah(PACKAGES['3bulan'].price)}\n📦 6 Bulan → ${formatRupiah(PACKAGES['6bulan'].price)}\n🏆 1 Tahun → ${formatRupiah(PACKAGES['1tahun'].price)}\n\nPilih paket di bawah:`, { ...keyboard });
 }
 
 // ========== TELEGRAM COMMANDS ==========
+// ========== RATE LIMIT MIDDLEWARE ==========
+tgBot.use(async (ctx, next) => {
+    const userId = ctx.from?.id;
+    if (userId && isRateLimited(userId)) {
+        try { await ctx.reply('⏳ Terlalu cepat! Tunggu beberapa detik.'); } catch (e) {}
+        return;
+    }
+    return next();
+});
+
 tgBot.start(async (ctx) => {
     const userId = ctx.from.id;
     const name = ctx.from.first_name || 'User';
@@ -1028,20 +1102,20 @@ tgBot.start(async (ctx) => {
     const loggedIn = userSessions.get(userId)?.loggedIn;
     const kb = await getKeyboard(userId);
     if (isAdmin(userId)) {
-        return ctx.reply(`╔${DIVIDER}╗\n║  ${BOT_NAME}\n╚${DIVIDER}╝\n\n👑 *Selamat datang, Admin ${esc(name)}!*\n\n${DIVIDER_THIN}\n${loggedIn ? `✅ WA: *Terhubung*\n\n*Pilih menu di keyboard bawah:*` : `🔴 WA: *Belum login*\n\nTekan *🔑 Login WhatsApp* untuk mulai.`}`, { parse_mode: 'Markdown', ...kb });
+        return ctx.reply(`╔${DIVIDER}╗\n║  ${BOT_NAME}\n╚${DIVIDER}╝\n\n👑 Selamat datang, Admin ${esc(name)}!\n\n${DIVIDER_THIN}\n${loggedIn ? `✅ WA: *Terhubung*\n\n*Pilih menu di keyboard bawah:*` : `🔴 WA: *Belum login*\n\nTekan *🔑 Login WhatsApp* untuk mulai.`}`, { ...kb });
     }
     if (status === 'regular') {
         const u = await getUser(userId);
-        return ctx.reply(`╔${DIVIDER}╗\n║  ${BOT_NAME}\n╚${DIVIDER}╝\n\n✅ *Halo ${esc(name)}!*\n\n${DIVIDER_THIN}\n🏷️ Status: *Premium Aktif*\n📅 Hingga: *${formatDate(u.expiresAt)}*\n⏳ Sisa: *${formatCountdown(u.expiresAt)}*\n${DIVIDER_THIN}\n\n${loggedIn ? `📡 WA: *Terhubung* ✅` : `🔴 WA: *Belum login*`}`, { parse_mode: 'Markdown', ...kb });
+        return ctx.reply(`╔${DIVIDER}╗\n║  ${BOT_NAME}\n╚${DIVIDER}╝\n\n✅ Halo ${esc(name)}!\n\n${DIVIDER_THIN}\n🏷️ Status: Premium Aktif\n📅 Hingga: ${formatDate(u.expiresAt)}\n⏳ Sisa: ${formatCountdown(u.expiresAt)}\n${DIVIDER_THIN}\n\n${loggedIn ? `📡 WA: *Terhubung* ✅` : `🔴 WA: *Belum login*`}`, { ...kb });
     }
     if (status === 'trial') {
         const u = await getUser(userId);
-        return ctx.reply(`╔${DIVIDER}╗\n║  ${BOT_NAME}\n╚${DIVIDER}╝\n\n🎁 *Halo ${esc(name)}!*\n\n${DIVIDER_THIN}\n🏷️ Status: *Trial Aktif*\n⏱ Habis: *${formatDate(u.trialExpiresAt)}*\n⏳ Sisa: *${formatCountdown(u.trialExpiresAt)}*\n${DIVIDER_THIN}\n\n${loggedIn ? `📡 WA: *Terhubung* ✅` : `🔴 WA: *Belum login*`}`, { parse_mode: 'Markdown', ...kb });
+        return ctx.reply(`╔${DIVIDER}╗\n║  ${BOT_NAME}\n╚${DIVIDER}╝\n\n🎁 Halo ${esc(name)}!\n\n${DIVIDER_THIN}\n🏷️ Status: Trial Aktif\n⏱ Habis: ${formatDate(u.trialExpiresAt)}\n⏳ Sisa: ${formatCountdown(u.trialExpiresAt)}\n${DIVIDER_THIN}\n\n${loggedIn ? `📡 WA: *Terhubung* ✅` : `🔴 WA: *Belum login*`}`, { ...kb });
     }
     if (status === 'expired' || status === 'trial_expired') {
-        return ctx.reply(`⚠️ *Akses lo sudah berakhir.*\nPerpanjang untuk bisa pakai lagi!`, { parse_mode: 'Markdown', ...kb });
+        return ctx.reply(`⚠️ Akses lo sudah berakhir.\nPerpanjang untuk bisa pakai lagi!`, { ...kb });
     }
-    await ctx.reply(`👋 *Halo ${esc(name)}!*\n\nBot ini membantu lo *kick anggota grup WhatsApp*.\n\n🎁 *COBA GRATIS ${TRIAL_DURATION_HOURS} JAM*\n⭐ *PREMIUM* — akses penuh\n\nPilih di keyboard bawah:`, { parse_mode: 'Markdown', ...kb });
+    await ctx.reply(`👋 Halo ${esc(name)}!\n\nBot ini membantu lo kick anggota grup WhatsApp.\n\n🎁 COBA GRATIS ${TRIAL_DURATION_HOURS} JAM\n⭐ PREMIUM — akses penuh\n\nPilih di keyboard bawah:`, { ...kb });
 });
 
 tgBot.command('trial', async (ctx) => {
@@ -1051,11 +1125,11 @@ tgBot.command('trial', async (ctx) => {
     if (status === 'regular') return ctx.reply('✅ Lo sudah punya akses reguler.', await getKeyboard(user.id));
     if (status === 'trial') {
         const u = await getUser(user.id);
-        return ctx.reply(`⏱ *Masih trial.* Sisa: ${formatCountdown(u.trialExpiresAt)}`, { parse_mode: 'Markdown', ...KB_PRE_LOGIN });
+        return ctx.reply(`⏱ Masih trial. Sisa: ${formatCountdown(u.trialExpiresAt)}`, { ...KB_PRE_LOGIN });
     }
     const result = await startTrial(user);
     if (!result.success) return ctx.reply(`❌ Gagal: ${result.reason}`);
-    await ctx.reply(`🎉 *TRIAL AKTIF!*\n\n✅ ${TRIAL_DURATION_HOURS} jam\n⏱ Berakhir: ${formatDate(result.expiresAt.toISOString())}\n\nTekan *🔑 Login WhatsApp* untuk mulai!`, { parse_mode: 'Markdown', ...KB_PRE_LOGIN });
+    await ctx.reply(`🎉 TRIAL AKTIF!\n\n✅ ${TRIAL_DURATION_HOURS} jam\n⏱ Berakhir: ${formatDate(result.expiresAt.toISOString())}\n\nTekan 🔑 Login WhatsApp untuk mulai!`, { ...KB_PRE_LOGIN });
 });
 
 tgBot.command('beli', showPriceMenu);
@@ -1069,12 +1143,12 @@ Object.keys(PACKAGES).forEach(pkgKey => {
         for (const adminId of ADMIN_IDS) {
             try {
                 const approveKeyboard = Markup.inlineKeyboard([[Markup.button.callback(`✅ Approve`, `admin_approve_${user.id}_${pkgKey}`), Markup.button.callback(`❌ Reject`, `admin_reject_${user.id}`)]]);
-                await tgBot.telegram.sendMessage(adminId, `🔔 *Permintaan Beli*\n👤 ${userDisplayName(user)}\n📦 ${pkg.label} (${formatRupiah(pkg.price)})`, { parse_mode: 'Markdown', ...approveKeyboard });
+                await tgBot.telegram.sendMessage(adminId, `🔔 Permintaan Beli\n👤 ${userDisplayName(user)}\n📦 ${pkg.label} (${formatRupiah(pkg.price)})`, { ...approveKeyboard });
             } catch (err) {
                 log('WARN', 'Payment', `Gagal kirim ke admin ${adminId}: ${err.message}`);
             }
         }
-        await ctx.reply(`✅ *Permintaan diterima!*\n\n💰 ${formatRupiah(pkg.price)}\n${PAYMENT_INFO}\n\nKonfirmasi ke ${PAYMENT_CONTACT} dengan format: \`KICKER-${user.id}-${pkgKey}\``, { parse_mode: 'Markdown' });
+        await ctx.reply(`✅ Permintaan diterima!\n\n💰 ${formatRupiah(pkg.price)}\n${PAYMENT_INFO}\n\nKonfirmasi ke ${PAYMENT_CONTACT} dengan format: \`KICKER-${user.id}-${pkgKey}\``);
     });
 });
 
@@ -1085,9 +1159,9 @@ tgBot.action(/^admin_approve_(\d+)_(\w+)$/, async (ctx) => {
     const pkgKey = ctx.match[2];
     const result = await approvePayment(targetId, pkgKey);
     if (!result.success) return ctx.editMessageText(`❌ Gagal: ${result.reason}`);
-    await ctx.editMessageText(`✅ *APPROVED!*\nID: ${targetId}\nPaket: ${result.pkg.label}\nAktif hingga: ${formatDate(result.expiresAt.toISOString())}`, { parse_mode: 'Markdown' });
+    await ctx.editMessageText(`✅ APPROVED!\nID: ${targetId}\nPaket: ${result.pkg.label}\nAktif hingga: ${formatDate(result.expiresAt.toISOString())}`);
     try {
-        await tgBot.telegram.sendMessage(targetId, `🎉 *PEMBAYARAN DIKONFIRMASI!*\n\n📦 ${result.pkg.label}\n📅 Aktif hingga: ${formatDate(result.expiresAt.toISOString())}\n\nTekan *🔑 Login WhatsApp* untuk mulai.`, { parse_mode: 'Markdown', ...KB_PRE_LOGIN });
+        await tgBot.telegram.sendMessage(targetId, `🎉 PEMBAYARAN DIKONFIRMASI!\n\n📦 ${result.pkg.label}\n📅 Aktif hingga: ${formatDate(result.expiresAt.toISOString())}\n\nTekan 🔑 Login WhatsApp untuk mulai.`, { ...KB_PRE_LOGIN });
     } catch (err) {
         log('WARN', 'Payment', `Gagal kirim konfirmasi ke user ${targetId}: ${err.message}`);
     }
@@ -1098,29 +1172,29 @@ tgBot.action(/^admin_reject_(\d+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const targetId = parseInt(ctx.match[1]);
     await db.removePendingPayment(targetId);
-    await ctx.editMessageText(`❌ *REJECTED*\nID: ${targetId}`, { parse_mode: 'Markdown' });
+    await ctx.editMessageText(`❌ REJECTED\nID: ${targetId}`);
     try {
-        await tgBot.telegram.sendMessage(targetId, `❌ *Pembayaran ditolak.*\nHubungi ${PAYMENT_CONTACT}`, { parse_mode: 'Markdown', ...KB_LANDING });
+        await tgBot.telegram.sendMessage(targetId, `❌ Pembayaran ditolak.\nHubungi ${PAYMENT_CONTACT}`, { ...KB_LANDING });
     } catch (err) {}
 });
 
 tgBot.command('login', requireAccess, async (ctx) => {
     const userId = ctx.from.id;
     const session = userSessions.get(userId);
-    if (session && session.loggedIn) return ctx.reply('✅ *Lo udah login!*', { parse_mode: 'Markdown' });
-    await ctx.reply(`🔄 *Memulai koneksi...*`, { parse_mode: 'Markdown' });
+    if (session && session.loggedIn) return ctx.reply('✅ Lo udah login!');
+    await ctx.reply(`🔄 Memulai koneksi...`);
     try {
         await startLogin(ctx, userId);
     } catch (err) {
         log('ERROR', 'Login', err.message, err);
-        await ctx.reply(`❌ *Gagal:* ${err.message}`, { parse_mode: 'Markdown' });
+        await ctx.reply(`❌ Gagal: ${err.message}`);
     }
 });
 
 tgBot.command('refreshqr', requireAccess, async (ctx) => {
     const userId = ctx.from.id;
     const session = userSessions.get(userId);
-    if (!session) return ctx.reply('❌ Belum ada sesi.', { parse_mode: 'Markdown' });
+    if (!session) return ctx.reply('❌ Belum ada sesi.');
     if (session.loggedIn) return ctx.reply('✅ Sudah login!');
     if (!session.lastQR) return ctx.reply('⏳ QR belum tersedia.');
     await sendQR(ctx, session.lastQR);
@@ -1137,23 +1211,23 @@ tgBot.command('logout', requireAccess, async (ctx) => {
         reconnectAttempts.delete(userId);
         conflictCooldowns.delete(userId);
         loginLocks.delete(userId);
-        await ctx.reply('✅ *Logout berhasil.*', { parse_mode: 'Markdown', ...KB_PRE_LOGIN });
+        await ctx.reply('✅ Logout berhasil.', { ...KB_PRE_LOGIN });
     } catch (err) {
-        await ctx.reply(`❌ *Error:* ${err.message}`, { parse_mode: 'Markdown' });
+        await ctx.reply(`❌ Error: ${err.message}`);
     }
 });
 
 tgBot.command('groups', requireAccess, async (ctx) => {
     const userId = ctx.from.id;
     const session = userSessions.get(userId);
-    if (!session || !session.loggedIn) return ctx.reply('❌ *Login dulu!*', { parse_mode: 'Markdown' });
+    if (!session || !session.loggedIn) return ctx.reply('❌ Login dulu!');
     await showGroupPicker(ctx, userId, session);
 });
 
 tgBot.command('select', requireAccess, async (ctx) => {
     const userId = ctx.from.id;
     const session = userSessions.get(userId);
-    if (!session || !session.loggedIn) return ctx.reply('❌ *Login dulu!*', { parse_mode: 'Markdown' });
+    if (!session || !session.loggedIn) return ctx.reply('❌ Login dulu!');
     const groupName = ctx.message.text.replace('/select', '').trim().replace(/^["']|["']$/g, '');
     if (groupName) {
         try {
@@ -1162,12 +1236,12 @@ tgBot.command('select', requireAccess, async (ctx) => {
             const isTrial = await isTrialOnly(userId);
             const allowedGroups = isTrial ? groups.slice(0, 1) : groups;
             const target = allowedGroups.find(g => g.subject.toLowerCase() === groupName.toLowerCase());
-            if (!target) return ctx.reply(`❌ Grup "${groupName}" tidak ditemukan.`, { parse_mode: 'Markdown' });
+            if (!target) return ctx.reply(`❌ Grup "${groupName}" tidak ditemukan.`);
             session.groupId = target.id;
             session.groupName = target.subject;
-            await ctx.reply(`✅ *Grup terpilih!*\n🎯 ${esc(target.subject)}\n👥 ${target.participants?.length || 0} anggota\n\nTekan *🔴 Kick Menu* untuk mulai.`, { parse_mode: 'Markdown' });
+            await ctx.reply(`✅ Grup terpilih!\n🎯 ${esc(target.subject)}\n👥 ${target.participants?.length || 0} anggota\n\nTekan 🔴 Kick Menu untuk mulai.`);
         } catch (err) {
-            await ctx.reply(`❌ Error: ${err.message}`, { parse_mode: 'Markdown' });
+            await ctx.reply(`❌ Error: ${err.message}`);
         }
     } else {
         await showGroupPicker(ctx, userId, session);
@@ -1177,18 +1251,18 @@ tgBot.command('select', requireAccess, async (ctx) => {
 tgBot.command('kickmenu', requireAccess, async (ctx) => {
     const userId = ctx.from.id;
     const session = userSessions.get(userId);
-    if (!session || !session.loggedIn) return ctx.reply('❌ *Login dulu!*', { parse_mode: 'Markdown' });
-    if (!session.groupId) return ctx.reply('❌ *Pilih grup dulu!*', { parse_mode: 'Markdown' });
+    if (!session || !session.loggedIn) return ctx.reply('❌ *Login dulu!*');
+    if (!session.groupId) return ctx.reply('❌ *Pilih grup dulu!*');
     await showKickMenu(ctx, userId, session);
 });
 
 tgBot.command('buatgrup', requireAccess, async (ctx) => {
     const userId = ctx.from.id;
     const session = userSessions.get(userId);
-    if (!session || !session.loggedIn) return ctx.reply('❌ *Login dulu!*', { parse_mode: 'Markdown' });
+    if (!session || !session.loggedIn) return ctx.reply('❌ *Login dulu!*');
     const namaGrup = ctx.message.text.replace('/buatgrup', '').trim().replace(/^["']|["']$/g, '');
-    if (!namaGrup) return ctx.reply('Format: /buatgrup "Nama Grup"', { parse_mode: 'Markdown' });
-    await ctx.reply(`⏳ *Membuat grup "${namaGrup}"...*`, { parse_mode: 'Markdown' });
+    if (!namaGrup) return ctx.reply('Format: /buatgrup "Nama Grup"');
+    await ctx.reply(`⏳ *Membuat grup "${namaGrup}"...*`);
     try {
         const result = await session.sock.groupCreate(namaGrup, []);
         session.groupId = result.id;
@@ -1198,22 +1272,22 @@ tgBot.command('buatgrup', requireAccess, async (ctx) => {
             const code = await session.sock.groupInviteCode(result.id);
             inviteLink = `https://chat.whatsapp.com/${code}`;
         } catch (err) {}
-        await ctx.reply(`✅ *Grup berhasil dibuat!*\n\n${namaGrup}\n🔗 ${inviteLink}\n\nTekan *🔴 Kick Menu* untuk mulai.`, { parse_mode: 'Markdown' });
+        await ctx.reply(`✅ Grup berhasil dibuat!\n\n${namaGrup}\n🔗 ${inviteLink}\n\nTekan 🔴 Kick Menu untuk mulai.`);
     } catch (err) {
-        await ctx.reply(`❌ Gagal: ${err.message}`, { parse_mode: 'Markdown' });
+        await ctx.reply(`❌ Gagal: ${err.message}`);
     }
 });
 
 tgBot.command('importvcf', requireAccess, async (ctx) => {
     const userId = ctx.from.id;
     const session = userSessions.get(userId);
-    if (!session || !session.loggedIn) return ctx.reply('❌ *Login dulu!*', { parse_mode: 'Markdown' });
+    if (!session || !session.loggedIn) return ctx.reply('❌ Login dulu!');
     const fetchAnim = await spinnerMessage(ctx, 'Mengambil daftar grup...');
     try {
         const chats = await session.sock.groupFetchAllParticipating();
         const groups = Object.values(chats);
         if (groups.length === 0) {
-            await fetchAnim.stop(`❌ *Tidak ada grup ditemukan.*`);
+            await fetchAnim.stop(`❌ Tidak ada grup ditemukan.`);
             return;
         }
         const isTrial = await isTrialOnly(userId);
@@ -1229,9 +1303,9 @@ tgBot.command('importvcf', requireAccess, async (ctx) => {
         let header = `╔${DIVIDER}╗\n║  PILIH GRUP TUJUAN VCF\n╚${DIVIDER}╝\n\n`;
         if (isTrial) header += `⚠️ _Trial: hanya 1 grup_\n\n`;
         header += `Pilih grup yang akan ditambahkan kontaknya:`;
-        await ctx.reply(header, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: buttons } });
+        await ctx.reply(header, { reply_markup: { inline_keyboard: buttons } });
     } catch (err) {
-        await fetchAnim.stop(`❌ *Error:* ${err.message}`);
+        await fetchAnim.stop(`❌ Error: ${err.message}`);
     }
 });
 
@@ -1247,20 +1321,52 @@ tgBot.command('status', requireAccess, async (ctx) => {
     if (accStatus === 'admin') accLine = '👑 Admin';
     else if (accStatus === 'regular') accLine = `⭐ Reguler (${formatCountdown(u?.expiresAt)})`;
     else if (accStatus === 'trial') accLine = `🎁 Trial (${formatCountdown(u?.trialExpiresAt)})`;
-    await ctx.reply(`📡 WA: ${waStatus}\n🏷️ Akun: ${accLine}\n🎯 Grup: ${session?.groupName || 'Belum pilih'}`, { parse_mode: 'Markdown' });
+    await ctx.reply(`📡 WA: ${waStatus}\n🏷️ Akun: ${accLine}\n🎯 Grup: ${session?.groupName || 'Belum pilih'}`);
 });
 
 tgBot.command('myaccount', async (ctx) => {
     const userId = ctx.from.id;
     const status = await getUserStatus(userId);
-    if (status === 'admin') return ctx.reply(`👑 Admin bot.`, { parse_mode: 'Markdown' });
+    if (status === 'admin') return ctx.reply(`👑 Admin bot.`);
     const u = await getUser(userId);
-    if (!u) return ctx.reply(`Belum terdaftar. Tekan *🎁 Coba Gratis*`, { parse_mode: 'Markdown', ...KB_LANDING });
-    await ctx.reply(`👤 ${userDisplayNameEsc(u)}\n🆔 ${u.id}\nStatus: ${status}\nExp: ${u.expiresAt ? formatDate(u.expiresAt) : u.trialExpiresAt ? formatDate(u.trialExpiresAt) : '-'}`, { parse_mode: 'Markdown' });
+    if (!u) return ctx.reply(`Belum terdaftar. Tekan 🎁 Coba Gratis`, { ...KB_LANDING });
+    await ctx.reply(`👤 ${userDisplayNameEsc(u)}\n🆔 ${u.id}\nStatus: ${status}\nExp: ${u.expiresAt ? formatDate(u.expiresAt) : u.trialExpiresAt ? formatDate(u.trialExpiresAt) : '-'}`);
 });
 
+
+// ========== HELP TEXT (SAFE, NO MARKDOWN CRASH) ==========
+function getHelpText(contact) {
+    return [
+        "Panduan Penggunaan WA Kicker Bot",
+        "",
+        "1. Daftar dan Aktifkan Akses",
+        "   Tekan Coba Gratis untuk trial gratis 24 jam",
+        "   Tekan Premium untuk beli paket reguler",
+        "",
+        "2. Login WhatsApp",
+        "   Tekan Login WhatsApp lalu scan QR di WA kamu",
+        "",
+        "3. Pilih Grup",
+        "   Tekan Daftar Grup atau Pilih Grup",
+        "   Ketuk nama grup dari daftar",
+        "",
+        "4. Import VCF",
+        "   Tekan Import VCF, pilih grup, kirim file .vcf",
+        "",
+        "5. Kick Anggota",
+        "   Tekan Kick Menu, centang anggota, tekan Kick",
+        "",
+        "PENTING:",
+        "- Bot hanya bisa kick jika kamu admin grup",
+        "- Akun WA yang login harus jadi admin di grup target",
+        "- Trial hanya bisa akses 1 grup",
+        "",
+        "Butuh bantuan? Hubungi " + contact
+    ].join("\n");
+}
+
 tgBot.command('help', async (ctx) => {
-    await ctx.reply("╔━━━━━━━━━━━━━━━━━━━━━━╗\n║  PANDUAN PENGGUNAAN\n╚━━━━━━━━━━━━━━━━━━━━━━╝\n\n┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n*📌 CARA PAKAI BOT:*\n┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n\n*1. Daftar & Aktifkan Akses*\n   Tekan 🎁 Coba Gratis untuk trial gratis 24 jam\n   Tekan ⭐ Premium untuk beli paket reguler\n\n*2. Login WhatsApp*\n   Tekan 🔑 Login WhatsApp\n   → Scan QR di WA lo\n\n*3. Pilih Grup (Kick)*\n   Tekan 📋 Daftar Grup atau 🎯 Pilih Grup\n   → Ketuk nama grup langsung dari daftar\n\n*4. Import VCF*\n   Tekan 📥 Import VCF\n   → Pilih grup tujuan dari daftar\n   → Kirim file .vcf\n\n*5. Kick Anggota*\n   Tekan 🔴 Kick Menu\n   → Centang anggota yang mau dikick\n   → Tekan tombol \"Kick\"\n\n┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n*⚠️ PENTING:*\n• Bot hanya bisa kick jika lo adalah *admin grup*\n• Akun WA yang login harus jadi *admin* di grup target\n• Trial hanya bisa akses *1 grup*\n• Kick & Import VCF punya *pilihan grup terpisah*\n┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n\nButuh bantuan? Hubungi ${PAYMENT_CONTACT}", { parse_mode: 'Markdown' });
+    await ctx.reply(getHelpText(PAYMENT_CONTACT));
 });
 
 tgBot.command('pendingpayment', async (ctx) => {
@@ -1277,7 +1383,7 @@ tgBot.command('pendingpayment', async (ctx) => {
 tgBot.command('userlist', async (ctx) => {
     if (!isAdmin(ctx.from.id)) return ctx.reply('⛔ Akses ditolak.');
     const users = await getAllUsers();
-    if (users.length === 0) return ctx.reply('*Belum ada user terdaftar.*', { parse_mode: 'Markdown' });
+    if (users.length === 0) return ctx.reply('Belum ada user terdaftar.');
     const now = new Date();
     const actives = users.filter(u => {
         const exp = u.role === 'trial' ? u.trialExpiresAt : u.expiresAt;
@@ -1306,14 +1412,14 @@ tgBot.command('userlist', async (ctx) => {
         msg += `\n_(+${expired.length} user expired tidak ditampilkan)_`;
     }
     msg += `\n\n/revokeuser [id] — Cabut akses`;
-    await ctx.reply(msg, { parse_mode: 'Markdown' });
+    await ctx.reply(msg);
 });
 
 tgBot.command('revokeuser', async (ctx) => {
     if (!isAdmin(ctx.from.id)) return ctx.reply('⛔ Akses ditolak.');
     const args = ctx.message.text.split(' ');
     const targetId = parseInt(args[1]);
-    if (!targetId) return ctx.reply(`*Format:* /revokeuser [user_id]`, { parse_mode: 'Markdown' });
+    if (!targetId) return ctx.reply(`Format: /revokeuser [user_id]`);
     const user = await revokeUser(targetId);
     if (!user) return ctx.reply(`❌ User ID ${targetId} tidak ditemukan.`);
     if (userSessions.has(targetId)) {
@@ -1324,7 +1430,7 @@ tgBot.command('revokeuser', async (ctx) => {
     }
     await ctx.reply(`🚫 Akses ${userDisplayName(user)} (ID: ${targetId}) dicabut.`);
     try {
-        await tgBot.telegram.sendMessage(targetId, `⚠️ *Akses lo ke ${BOT_NAME} telah dicabut oleh admin.*\n\nHubungi ${PAYMENT_CONTACT} jika ada pertanyaan.`, { parse_mode: 'Markdown', ...KB_LANDING });
+        await tgBot.telegram.sendMessage(targetId, `⚠️ Akses lo ke ${BOT_NAME} telah dicabut oleh admin.\n\nHubungi ${PAYMENT_CONTACT} jika ada pertanyaan.`, { ...KB_LANDING });
     } catch (err) {}
 });
 
@@ -1334,13 +1440,13 @@ tgBot.command('adduser', async (ctx) => {
     const targetId = parseInt(args[1]);
     const pkgKey = args[2];
     if (!targetId || !pkgKey || !PACKAGES[pkgKey]) {
-        return ctx.reply(`*Format:* /adduser [user_id] [paket]\n\nPaket: 1bulan / 3bulan / 6bulan / 1tahun`, { parse_mode: 'Markdown' });
+        return ctx.reply(`Format: /adduser [user_id] [paket]\n\nPaket: 1bulan / 3bulan / 6bulan / 1tahun`);
     }
     const result = await approvePayment(targetId, pkgKey);
     if (!result.success) return ctx.reply(`❌ Gagal: ${result.reason}`);
-    await ctx.reply(`✅ *User berhasil ditambahkan!*\n\n🆔 ID: \`${targetId}\`\n📦 Paket: *${result.pkg.label}*\n📅 Aktif hingga: *${formatDate(result.expiresAt.toISOString())}*`, { parse_mode: 'Markdown' });
+    await ctx.reply(`✅ User berhasil ditambahkan!\n\n🆔 ID: \`${targetId}\`\n📦 Paket: ${result.pkg.label}\n📅 Aktif hingga: ${formatDate(result.expiresAt.toISOString())}`);
     try {
-        await tgBot.telegram.sendMessage(targetId, `🎉 *Akses ke ${BOT_NAME} sudah diaktifkan!*\n\n📦 Paket: *${result.pkg.label}*\n📅 Aktif hingga: *${formatDate(result.expiresAt.toISOString())}*\n\nTekan *🔑 Login WhatsApp* untuk mulai.`, { parse_mode: 'Markdown', ...KB_PRE_LOGIN });
+        await tgBot.telegram.sendMessage(targetId, `🎉 Akses ke ${BOT_NAME} sudah diaktifkan!\n\n📦 Paket: ${result.pkg.label}\n📅 Aktif hingga: ${formatDate(result.expiresAt.toISOString())}\n\nTekan 🔑 Login WhatsApp untuk mulai.`, { ...KB_PRE_LOGIN });
     } catch (err) {}
 });
 
@@ -1351,28 +1457,28 @@ tgBot.hears('🎁 Coba Gratis (Trial)', async (ctx) => {
     if (status === 'regular') return ctx.reply('✅ Sudah punya akses.', await getKeyboard(user.id));
     if (status === 'trial') {
         const u = await getUser(user.id);
-        return ctx.reply(`⏱ Masih trial: ${formatCountdown(u.trialExpiresAt)}`, { parse_mode: 'Markdown', ...KB_PRE_LOGIN });
+        return ctx.reply(`⏱ Masih trial: ${formatCountdown(u.trialExpiresAt)}`, { ...KB_PRE_LOGIN });
     }
     const result = await startTrial(user);
     if (!result.success) return ctx.reply(`❌ ${result.reason}`);
-    await ctx.reply(`🎉 *TRIAL AKTIF!*\n\nTekan *🔑 Login WhatsApp* untuk mulai.`, { parse_mode: 'Markdown', ...KB_PRE_LOGIN });
+    await ctx.reply(`🎉 TRIAL AKTIF!\n\nTekan 🔑 Login WhatsApp untuk mulai.`, { ...KB_PRE_LOGIN });
 });
 
 tgBot.hears('⭐ Premium', async (ctx) => { await showPriceMenu(ctx); });
 
 tgBot.hears('❓ Bantuan', async (ctx) => {
-    await ctx.reply("╔━━━━━━━━━━━━━━━━━━━━━━╗\n║  PANDUAN PENGGUNAAN\n╚━━━━━━━━━━━━━━━━━━━━━━╝\n\n┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n*📌 CARA PAKAI BOT:*\n┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n\n*1. Daftar & Aktifkan Akses*\n   Tekan 🎁 Coba Gratis untuk trial gratis 24 jam\n   Tekan ⭐ Premium untuk beli paket reguler\n\n*2. Login WhatsApp*\n   Tekan 🔑 Login WhatsApp\n   → Scan QR di WA lo\n\n*3. Pilih Grup (Kick)*\n   Tekan 📋 Daftar Grup atau 🎯 Pilih Grup\n   → Ketuk nama grup langsung dari daftar\n\n*4. Import VCF*\n   Tekan 📥 Import VCF\n   → Pilih grup tujuan dari daftar\n   → Kirim file .vcf\n\n*5. Kick Anggota*\n   Tekan 🔴 Kick Menu\n   → Centang anggota yang mau dikick\n   → Tekan tombol \"Kick\"\n\n┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n*⚠️ PENTING:*\n• Bot hanya bisa kick jika lo adalah *admin grup*\n• Akun WA yang login harus jadi *admin* di grup target\n• Trial hanya bisa akses *1 grup*\n• Kick & Import VCF punya *pilihan grup terpisah*\n┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n\nButuh bantuan? Hubungi ${PAYMENT_CONTACT}", { parse_mode: 'Markdown' });
+    await ctx.reply(getHelpText(PAYMENT_CONTACT));
 });
 
 tgBot.hears('🔑 Login WhatsApp', requireAccess, async (ctx) => {
     const userId = ctx.from.id;
     const session = userSessions.get(userId);
-    if (session && session.loggedIn) return ctx.reply('✅ *Lo udah login!*', { parse_mode: 'Markdown' });
-    await ctx.reply(`🔄 *Memulai koneksi...*`, { parse_mode: 'Markdown' });
+    if (session && session.loggedIn) return ctx.reply('✅ Lo udah login!');
+    await ctx.reply(`🔄 Memulai koneksi...`);
     try {
         await startLogin(ctx, userId);
     } catch (err) {
-        await ctx.reply(`❌ *Gagal:* ${err.message}`, { parse_mode: 'Markdown' });
+        await ctx.reply(`❌ Gagal: ${err.message}`);
     }
 });
 
@@ -1388,46 +1494,46 @@ tgBot.hears('📊 Status', requireAccess, async (ctx) => {
     if (accStatus === 'admin') accLine = '👑 Admin';
     else if (accStatus === 'regular') accLine = `⭐ Reguler (${formatCountdown(u?.expiresAt)})`;
     else if (accStatus === 'trial') accLine = `🎁 Trial (${formatCountdown(u?.trialExpiresAt)})`;
-    await ctx.reply(`📡 WA: ${waStatus}\n🏷️ Akun: ${accLine}\n🎯 Grup: ${session?.groupName || 'Belum pilih'}`, { parse_mode: 'Markdown' });
+    await ctx.reply(`📡 WA: ${waStatus}\n🏷️ Akun: ${accLine}\n🎯 Grup: ${session?.groupName || 'Belum pilih'}`);
 });
 
 tgBot.hears('👤 Akun Saya', async (ctx) => {
     const userId = ctx.from.id;
     const status = await getUserStatus(userId);
-    if (status === 'admin') return ctx.reply(`👑 Admin bot.`, { parse_mode: 'Markdown' });
+    if (status === 'admin') return ctx.reply(`👑 Admin bot.`);
     const u = await getUser(userId);
-    if (!u) return ctx.reply(`Belum terdaftar. Tekan *🎁 Coba Gratis*`, { parse_mode: 'Markdown', ...KB_LANDING });
-    await ctx.reply(`👤 ${userDisplayNameEsc(u)}\n🆔 ${u.id}\nStatus: ${status}\nExp: ${u.expiresAt ? formatDate(u.expiresAt) : u.trialExpiresAt ? formatDate(u.trialExpiresAt) : '-'}`, { parse_mode: 'Markdown' });
+    if (!u) return ctx.reply(`Belum terdaftar. Tekan 🎁 Coba Gratis`, { ...KB_LANDING });
+    await ctx.reply(`👤 ${userDisplayNameEsc(u)}\n🆔 ${u.id}\nStatus: ${status}\nExp: ${u.expiresAt ? formatDate(u.expiresAt) : u.trialExpiresAt ? formatDate(u.trialExpiresAt) : '-'}`);
 });
 
 tgBot.hears('📋 Daftar Grup', requireAccess, async (ctx) => {
     const userId = ctx.from.id;
     const session = userSessions.get(userId);
-    if (!session || !session.loggedIn) return ctx.reply('❌ *Login dulu!*', { parse_mode: 'Markdown' });
+    if (!session || !session.loggedIn) return ctx.reply('❌ Login dulu!');
     await showGroupPicker(ctx, userId, session);
 });
 
 tgBot.hears('🎯 Pilih Grup', requireAccess, async (ctx) => {
     const userId = ctx.from.id;
     const session = userSessions.get(userId);
-    if (!session || !session.loggedIn) return ctx.reply('❌ *Login dulu!*', { parse_mode: 'Markdown' });
+    if (!session || !session.loggedIn) return ctx.reply('❌ Login dulu!');
     await showGroupPicker(ctx, userId, session);
 });
 
 tgBot.hears('➕ Buat Grup WA', requireAccess, async (ctx) => {
-    await ctx.reply(`Format: /buatgrup "Nama Grup"\n\nContoh: /buatgrup "Arisan RT 05"`, { parse_mode: 'Markdown' });
+    await ctx.reply(`Format: /buatgrup "Nama Grup"\n\nContoh: /buatgrup "Arisan RT 05"`);
 });
 
 tgBot.hears('📥 Import VCF', requireAccess, async (ctx) => {
     const userId = ctx.from.id;
     const session = userSessions.get(userId);
-    if (!session || !session.loggedIn) return ctx.reply('❌ *Login dulu!*', { parse_mode: 'Markdown' });
+    if (!session || !session.loggedIn) return ctx.reply('❌ Login dulu!');
     const fetchAnim = await spinnerMessage(ctx, 'Mengambil daftar grup...');
     try {
         const chats = await session.sock.groupFetchAllParticipating();
         const groups = Object.values(chats);
         if (groups.length === 0) {
-            await fetchAnim.stop(`❌ *Tidak ada grup ditemukan.*`);
+            await fetchAnim.stop(`❌ Tidak ada grup ditemukan.`);
             return;
         }
         const isTrial = await isTrialOnly(userId);
@@ -1443,17 +1549,17 @@ tgBot.hears('📥 Import VCF', requireAccess, async (ctx) => {
         let header = `╔${DIVIDER}╗\n║  PILIH GRUP TUJUAN VCF\n╚${DIVIDER}╝\n\n`;
         if (isTrial) header += `⚠️ _Trial: hanya 1 grup_\n\n`;
         header += `Pilih grup yang akan ditambahkan kontaknya:`;
-        await ctx.reply(header, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: buttons } });
+        await ctx.reply(header, { reply_markup: { inline_keyboard: buttons } });
     } catch (err) {
-        await fetchAnim.stop(`❌ *Error:* ${err.message}`);
+        await fetchAnim.stop(`❌ Error: ${err.message}`);
     }
 });
 
 tgBot.hears('🔴 Kick Menu', requireAccess, async (ctx) => {
     const userId = ctx.from.id;
     const session = userSessions.get(userId);
-    if (!session || !session.loggedIn) return ctx.reply('❌ *Login dulu!*', { parse_mode: 'Markdown' });
-    if (!session.groupId) return ctx.reply('❌ *Pilih grup dulu!*', { parse_mode: 'Markdown' });
+    if (!session || !session.loggedIn) return ctx.reply('❌ Login dulu!');
+    if (!session.groupId) return ctx.reply('❌ Pilih grup dulu!');
     await showKickMenu(ctx, userId, session);
 });
 
@@ -1469,7 +1575,7 @@ tgBot.hears('📡 Status', requireAccess, async (ctx) => {
     if (accStatus === 'admin') accLine = '👑 Admin';
     else if (accStatus === 'regular') accLine = `⭐ Reguler (${formatCountdown(u?.expiresAt)})`;
     else if (accStatus === 'trial') accLine = `🎁 Trial (${formatCountdown(u?.trialExpiresAt)})`;
-    await ctx.reply(`📡 WA: ${waStatus}\n🏷️ Akun: ${accLine}\n🎯 Grup: ${session?.groupName || 'Belum pilih'}`, { parse_mode: 'Markdown' });
+    await ctx.reply(`📡 WA: ${waStatus}\n🏷️ Akun: ${accLine}\n🎯 Grup: ${session?.groupName || 'Belum pilih'}`);
 });
 
 tgBot.hears('🚪 Logout WhatsApp', requireAccess, async (ctx) => {
@@ -1483,9 +1589,9 @@ tgBot.hears('🚪 Logout WhatsApp', requireAccess, async (ctx) => {
         reconnectAttempts.delete(userId);
         conflictCooldowns.delete(userId);
         loginLocks.delete(userId);
-        await ctx.reply('✅ *Logout berhasil.*', { parse_mode: 'Markdown', ...KB_PRE_LOGIN });
+        await ctx.reply('✅ Logout berhasil.', { ...KB_PRE_LOGIN });
     } catch (err) {
-        await ctx.reply(`❌ *Error:* ${err.message}`, { parse_mode: 'Markdown' });
+        await ctx.reply(`❌ Error: ${err.message}`);
     }
 });
 
@@ -1503,7 +1609,7 @@ tgBot.hears('📋 Pending Payment', async (ctx) => {
 tgBot.hears('👥 User List', async (ctx) => {
     if (!isAdmin(ctx.from.id)) return ctx.reply('⛔ Akses ditolak.');
     const users = await getAllUsers();
-    if (users.length === 0) return ctx.reply('*Belum ada user terdaftar.*', { parse_mode: 'Markdown' });
+    if (users.length === 0) return ctx.reply('Belum ada user terdaftar.');
     const now = new Date();
     const actives = users.filter(u => {
         const exp = u.role === 'trial' ? u.trialExpiresAt : u.expiresAt;
@@ -1532,7 +1638,7 @@ tgBot.hears('👥 User List', async (ctx) => {
         msg += `\n_(+${expired.length} user expired tidak ditampilkan)_`;
     }
     msg += `\n\n/revokeuser [id] — Cabut akses`;
-    await ctx.reply(msg, { parse_mode: 'Markdown' });
+    await ctx.reply(msg);
 });
 
 // ========== DOCUMENT HANDLER (VCF) ==========
@@ -1543,9 +1649,9 @@ tgBot.on('document', requireAccess, async (ctx) => {
     const doc = ctx.message.document;
     const fname = doc.file_name || '';
     if (!fname.toLowerCase().endsWith('.vcf')) {
-        return ctx.reply('⚠️ *File harus .vcf*', { parse_mode: 'Markdown' });
+        return ctx.reply('⚠️ File harus .vcf');
     }
-    await ctx.reply('⏳ *Membaca file VCF...*', { parse_mode: 'Markdown' });
+    await ctx.reply('⏳ Membaca file VCF...');
     try {
         const fileLink = await ctx.telegram.getFileLink(doc.file_id);
         const resp = await fetch(fileLink.href);
@@ -1553,16 +1659,16 @@ tgBot.on('document', requireAccess, async (ctx) => {
         const contacts = parseVCF(vcfText);
         if (contacts.length === 0) {
             vcfPending.delete(userId);
-            return ctx.reply('❌ *Tidak ada nomor valid.*', { parse_mode: 'Markdown' });
+            return ctx.reply('❌ Tidak ada nomor valid.');
         }
         pending.contacts = contacts;
         pending.waitingFile = false;
         vcfPending.set(userId, pending);
         const keyboard = Markup.inlineKeyboard([[Markup.button.callback(`✅ Tambah Semua (${contacts.length})`, 'vcf_add_all')], [Markup.button.callback('❌ Batal', 'vcf_cancel')]]);
-        await ctx.reply(`📊 *${contacts.length} kontak* ditemukan.\n🎯 Grup tujuan: *${pending.groupName}*\n\nTambahkan sekarang?`, { parse_mode: 'Markdown', ...keyboard });
+        await ctx.reply(`📊 ${contacts.length} kontak ditemukan.\n🎯 Grup tujuan: ${pending.groupName}\n\nTambahkan sekarang?`, { ...keyboard });
     } catch (err) {
         vcfPending.delete(userId);
-        await ctx.reply(`❌ Error: ${err.message}`, { parse_mode: 'Markdown' });
+        await ctx.reply(`❌ Error: ${err.message}`);
     }
 });
 
@@ -1574,22 +1680,22 @@ tgBot.action(/^selectgrp_(\d+|cancel)$/, requireAccess, async (ctx) => {
     const session = userSessions.get(userId);
     if (param === 'cancel') {
         if (session) session._groupPickerList = null;
-        return ctx.editMessageText('✖ *Pemilihan grup dibatalkan.*', { parse_mode: 'Markdown' });
+        return ctx.editMessageText('✖ Pemilihan grup dibatalkan.');
     }
     if (!session || !session.loggedIn) {
-        return ctx.editMessageText('❌ *Session habis. Login ulang.*', { parse_mode: 'Markdown' });
+        return ctx.editMessageText('❌ Session habis. Login ulang.');
     }
     const idx = parseInt(param);
     const groupList = session._groupPickerList;
     if (!groupList || idx >= groupList.length) {
-        return ctx.editMessageText('❌ *Data grup tidak ditemukan. Coba lagi.*', { parse_mode: 'Markdown' });
+        return ctx.editMessageText('❌ Data grup tidak ditemukan. Coba lagi.');
     }
     const target = groupList[idx];
     session.groupId = target.id;
     session.groupName = target.subject;
     session._groupPickerList = null;
     const memberCount = target.participants?.length || 0;
-    await ctx.editMessageText(`✅ *Grup terpilih!*\n\n🎯 *${esc(target.subject)}*\n👥 ${memberCount} anggota\n\nTekan *🔴 Kick Menu* untuk mulai.`, { parse_mode: 'Markdown' });
+    await ctx.editMessageText(`✅ Grup terpilih!\n\n🎯 ${esc(target.subject)}\n👥 ${memberCount} anggota\n\nTekan 🔴 Kick Menu untuk mulai.`);
 });
 
 tgBot.action(/^vcfgrp_(\d+|cancel)$/, requireAccess, async (ctx) => {
@@ -1599,20 +1705,20 @@ tgBot.action(/^vcfgrp_(\d+|cancel)$/, requireAccess, async (ctx) => {
     const session = userSessions.get(userId);
     if (param === 'cancel') {
         if (session) session._vcfGroupPickerList = null;
-        return ctx.editMessageText('✖ *Import VCF dibatalkan.*', { parse_mode: 'Markdown' });
+        return ctx.editMessageText('✖ Import VCF dibatalkan.');
     }
     if (!session || !session.loggedIn) {
-        return ctx.editMessageText('❌ *Session habis. Login ulang.*', { parse_mode: 'Markdown' });
+        return ctx.editMessageText('❌ Session habis. Login ulang.');
     }
     const idx = parseInt(param);
     const groupList = session._vcfGroupPickerList;
     if (!groupList || idx >= groupList.length) {
-        return ctx.editMessageText('❌ *Data grup tidak ditemukan. Coba lagi.*', { parse_mode: 'Markdown' });
+        return ctx.editMessageText('❌ Data grup tidak ditemukan. Coba lagi.');
     }
     const target = groupList[idx];
     session._vcfGroupPickerList = null;
     vcfPending.set(userId, { waitingFile: true, groupId: target.id, groupName: target.subject });
-    await ctx.editMessageText(`✅ *Grup tujuan VCF dipilih!*\n\n🎯 *${esc(target.subject)}*\n👥 ${target.participants?.length || 0} anggota\n\n📎 *Sekarang kirim file .vcf ke chat ini.*`, { parse_mode: 'Markdown' });
+    await ctx.editMessageText(`✅ Grup tujuan VCF dipilih!\n\n🎯 ${esc(target.subject)}\n👥 ${target.participants?.length || 0} anggota\n\n📎 Sekarang kirim file .vcf ke chat ini.`);
 });
 
 tgBot.action('vcf_add_all', async (ctx) => {
@@ -1627,7 +1733,7 @@ tgBot.action('vcf_add_all', async (ctx) => {
 tgBot.action('vcf_cancel', async (ctx) => {
     vcfPending.delete(ctx.from.id);
     await ctx.answerCbQuery('Dibatalkan');
-    await ctx.reply('✖ *Import dibatalkan.*', { parse_mode: 'Markdown' });
+    await ctx.reply('✖ Import dibatalkan.');
 });
 
 tgBot.action(/^toggle_(.+)$/, async (ctx) => {
@@ -1652,23 +1758,23 @@ tgBot.action('do_kick', async (ctx) => {
     if (!await canUseBot(userId)) return ctx.answerCbQuery('⛔ Ditolak.');
     await ctx.answerCbQuery();
     if (!isAdmin(userId) && !isActiveHours()) {
-        return ctx.reply(`⚠️ *Untuk keamanan akun WA, kick hanya bisa dilakukan jam 08.00 - 22.00 WIB.*\n\n_Ini untuk menghindari deteksi otomatis dari WhatsApp._`, { parse_mode: 'Markdown' });
+        return ctx.reply(`⚠️ Untuk keamanan akun WA, kick hanya bisa dilakukan jam 08.00 - 22.00 WIB.\n\n_Ini untuk menghindari deteksi otomatis dari WhatsApp._`);
     }
     const session = userSessions.get(userId);
     const selected = kickSelections.get(userId);
     if (!session || !session.loggedIn) return ctx.reply('❌ Session expired.');
-    if (!selected || selected.size === 0) return ctx.reply('⚠️ *Belum ada yang dipilih!*', { parse_mode: 'Markdown' });
+    if (!selected || selected.size === 0) return ctx.reply('⚠️ Belum ada yang dipilih!');
     const jidList = Array.from(selected);
     const kickAnim = await liveKickProgress(ctx, jidList.length);
     const totalKicked = await burstThenPauseKick(session.sock, session.groupId, jidList, (progress) => { kickAnim.update(progress); });
     kickSelections.set(userId, new Set());
-    await kickAnim.stop(`✅ *Kick Selesai\\!*\n\n🦵 *${totalKicked}* dari *${jidList.length}* anggota berhasil dikick\\.\n🎯 Grup: *${esc(session.groupName || 'N/A')}*`);
+    await kickAnim.stop(`✅ Kick Selesai\\!\n\n🦵 ${totalKicked} dari ${jidList.length} anggota berhasil dikick\\.\n🎯 Grup: ${esc(session.groupName || 'N/A')}`);
 });
 
 tgBot.action('cancel_kick', async (ctx) => {
     kickSelections.set(ctx.from.id, new Set());
     await ctx.answerCbQuery('Dibatalkan');
-    await ctx.reply('✖ *Kick dibatalkan.*', { parse_mode: 'Markdown' });
+    await ctx.reply('✖ Kick dibatalkan.');
 });
 
 // ========== AUTO EXPIRE NOTIF ==========
@@ -1681,7 +1787,7 @@ setInterval(async () => {
         const msLeft = new Date(exp) - now;
         if (msLeft > 0 && msLeft <= 24 * 60 * 60 * 1000 && !u.notifiedExpiry) {
             try {
-                await tgBot.telegram.sendMessage(u.id, `⚠️ *Akses akan habis dalam ${formatCountdown(exp)}*\nPerpanjang: /beli`, { parse_mode: 'Markdown' });
+                await tgBot.telegram.sendMessage(u.id, `⚠️ Akses akan habis dalam ${formatCountdown(exp)}\nPerpanjang: /beli`);
                 await db.updateNotifiedFlag(u.id);
             } catch (err) {
                 log('WARN', 'Expiry', `Gagal kirim notif ke ${u.id}: ${err.message}`);
