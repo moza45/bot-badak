@@ -1132,11 +1132,17 @@ tgBot.command('trial', async (ctx) => {
     await ctx.reply(`🎉 TRIAL AKTIF!\n\n✅ ${TRIAL_DURATION_HOURS} jam\n⏱ Berakhir: ${formatDate(result.expiresAt.toISOString())}\n\nTekan 🔑 Login WhatsApp untuk mulai!`, { ...KB_PRE_LOGIN });
 });
 
-tgBot.command('beli', showPriceMenu);
+tgBot.command('beli', async (ctx) => {
+    if (isAdmin(ctx.from.id)) return ctx.reply('👑 Kamu adalah admin. Tidak perlu beli paket.');
+    await showPriceMenu(ctx);
+});
 
 Object.keys(PACKAGES).forEach(pkgKey => {
     tgBot.action(`buy_${pkgKey}`, async (ctx) => {
         await ctx.answerCbQuery();
+        if (isAdmin(ctx.from.id)) {
+            return ctx.reply('👑 Kamu adalah admin. Tidak perlu beli paket.');
+        }
         const pkg = PACKAGES[pkgKey];
         const user = ctx.from;
         await addPendingPayment(user, pkgKey);
@@ -1148,7 +1154,7 @@ Object.keys(PACKAGES).forEach(pkgKey => {
                 log('WARN', 'Payment', `Gagal kirim ke admin ${adminId}: ${err.message}`);
             }
         }
-        await ctx.reply(`✅ Permintaan diterima!\n\n💰 ${formatRupiah(pkg.price)}\n${PAYMENT_INFO}\n\nKonfirmasi ke ${PAYMENT_CONTACT} dengan format: \`KICKER-${user.id}-${pkgKey}\``);
+        await ctx.reply(`✅ Permintaan diterima!\n\n💰 ${formatRupiah(pkg.price)}\n${PAYMENT_INFO}\n\nKonfirmasi ke ${PAYMENT_CONTACT} dengan format: KICKER-${user.id}-${pkgKey}`);
     });
 });
 
@@ -1464,7 +1470,10 @@ tgBot.hears('🎁 Coba Gratis (Trial)', async (ctx) => {
     await ctx.reply(`🎉 TRIAL AKTIF!\n\nTekan 🔑 Login WhatsApp untuk mulai.`, { ...KB_PRE_LOGIN });
 });
 
-tgBot.hears('⭐ Premium', async (ctx) => { await showPriceMenu(ctx); });
+tgBot.hears('⭐ Premium', async (ctx) => {
+    if (isAdmin(ctx.from.id)) return ctx.reply('👑 Kamu adalah admin. Tidak perlu beli paket.');
+    await showPriceMenu(ctx);
+});
 
 tgBot.hears('❓ Bantuan', async (ctx) => {
     await ctx.reply(getHelpText(PAYMENT_CONTACT));
