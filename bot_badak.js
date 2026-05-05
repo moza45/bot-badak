@@ -1751,7 +1751,7 @@ setInterval(async () => {
 }, 60 * 60 * 1000);
 
 // ========== HEALTH CHECK (FIXED WITH AUTH) ==========
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 http.createServer((req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const apiKey = url.searchParams.get('key');
