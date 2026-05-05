@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const http = require('http');
-const sqlite3 = require('sqlite3').verbose();
+const sqlite3 = require('better-sqlite3');
 
 // ╔══════════════════════════════════════════════════════════════╗
 // ║         W A - K I C K E R   B O T   v 5 . 1 . 0            ║
