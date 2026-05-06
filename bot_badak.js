@@ -589,6 +589,60 @@ function getEncryptedAuthFolder(userId) {
     return path.join(AUTH_BASE_FOLDER, hash);
 }
 
+// ========== AUTH FOLDER MANAGEMENT (RAILWAY PRODUCTION) ==========
+
+// Hapus auth folder user — dipanggil saat 401 atau corrupt
+async function clearAuthFolder(userId, reason = 'unknown') {
+    const authFolder = getEncryptedAuthFolder(userId);
+    try {
+        if (fs.existsSync(authFolder)) {
+            fs.rmSync(authFolder, { recursive: true, force: true });
+            log('INFO', 'Auth', `[${userId}] Auth folder dihapus (reason: ${reason})`);
+        }
+    } catch (err) {
+        log('WARN', 'Auth', `[${userId}] Gagal hapus auth folder: ${err.message}`);
+    }
+}
+
+// Cek apakah auth folder corrupt (ada file tapi isinya invalid JSON)
+function isAuthCorrupt(userId) {
+    const authFolder = getEncryptedAuthFolder(userId);
+    if (!fs.existsSync(authFolder)) return false;
+    try {
+        const files = fs.readdirSync(authFolder);
+        if (files.length === 0) return true; // folder kosong = corrupt
+        for (const file of files) {
+            if (!file.endsWith('.json')) continue;
+            const raw = fs.readFileSync(path.join(authFolder, file), 'utf-8');
+            JSON.parse(raw); // akan throw kalau corrupt
+        }
+        return false;
+    } catch (err) {
+        log('WARN', 'Auth', `[${userId}] Auth corrupt: ${err.message}`);
+        return true;
+    }
+}
+
+// Anti login spam — track berapa kali user login dalam window waktu
+const loginAttemptTracker = new Map(); // userId → { count, firstAt }
+const LOGIN_SPAM_WINDOW_MS = 5 * 60 * 1000; // 5 menit
+const LOGIN_SPAM_MAX = 5; // maks 5 login dalam 5 menit
+
+function isLoginSpam(userId) {
+    const now = Date.now();
+    const entry = loginAttemptTracker.get(userId);
+    if (!entry || now - entry.firstAt > LOGIN_SPAM_WINDOW_MS) {
+        loginAttemptTracker.set(userId, { count: 1, firstAt: now });
+        return false;
+    }
+    entry.count++;
+    if (entry.count > LOGIN_SPAM_MAX) {
+        const sisaMs = LOGIN_SPAM_WINDOW_MS - (now - entry.firstAt);
+        return Math.ceil(sisaMs / 1000); // return sisa detik
+    }
+    return false;
+}
+
 // ========== BACKGROUND ACTIVITY SPOOFER (FIXED) ==========
 async function startBackgroundActivitySpooler(sock, userId) {
     let isActive = true;
@@ -827,10 +881,16 @@ async function destroySession(userId) {
 
 // ========== LOGIN ==========
 async function startLogin(ctx, userId) {
+    // Cek cooldown stream conflict
     const cooldownUntil = conflictCooldowns.get(userId);
     if (cooldownUntil && Date.now() < cooldownUntil) {
         const sisaDetik = Math.ceil((cooldownUntil - Date.now()) / 1000);
         return safeReply(ctx, `⏳ Harap tunggu ${sisaDetik} detik lagi\n\nWA server masih melepas koneksi sebelumnya.\n_(anti Stream Conflict aktif)_`);
+    }
+    // Cek login spam
+    const spamSisa = isLoginSpam(userId);
+    if (spamSisa) {
+        return safeReply(ctx, `🚫 Terlalu banyak percobaan login.\n\nCoba lagi dalam ${spamSisa} detik.\n_(Maks ${LOGIN_SPAM_MAX}x login per ${LOGIN_SPAM_WINDOW_MS / 60000} menit)_`);
     }
     if (loginLocks.get(userId)) {
         return safeReply(ctx, `⏳ Proses login sedang berjalan, harap tunggu...`);
@@ -840,6 +900,12 @@ async function startLogin(ctx, userId) {
         if (userSessions.has(userId)) {
             await safeReply(ctx, `🔄 _Menutup koneksi lama..._`);
             await destroySession(userId);
+        }
+        // Cek auth corrupt sebelum connect — hapus otomatis jika rusak
+        if (isAuthCorrupt(userId)) {
+            log('WARN', 'Login', `[${userId}] Auth corrupt, hapus otomatis...`);
+            await clearAuthFolder(userId, 'corrupt-detected');
+            await safeReply(ctx, `⚠️ _Session lama rusak, dihapus otomatis. Silakan scan QR baru._`);
         }
         const authFolder = getEncryptedAuthFolder(userId);
         const { version } = await fetchLatestBaileysVersion();
@@ -895,18 +961,29 @@ async function startLogin(ctx, userId) {
                 if (statusCode === 515) {
                     sock.ev.removeAllListeners();
                     userSessions.delete(userId);
-                    reconnectAttempts.delete(userId);
-                    conflictCooldowns.set(userId, Date.now() + CONFLICT_COOLDOWN_MS);
+                    // Hitung cooldown bertahap: makin sering 515, makin lama cooldown
+                    const conflictCount = (reconnectAttempts.get(userId) || 0);
+                    reconnectAttempts.set(userId, conflictCount + 1);
+                    const cooldownMs = Math.min(CONFLICT_COOLDOWN_MS * Math.pow(2, conflictCount), 5 * 60 * 1000); // max 5 menit
+                    conflictCooldowns.set(userId, Date.now() + cooldownMs);
                     try { await connectAnim.stop(null); } catch (err) {}
-                    await safeReply(ctx, `⚠️ Stream Conflict (515)\n\nWA mendeteksi koneksi ganda dari device yang sama.\n\nPenyebab umum:\n• Bot di-restart terlalu cepat\n• Ada instance bot lain aktif\n• Session belum dilepas server WA`);
-                    await liveCountdown(ctx, CONFLICT_COOLDOWN_MS, 'Cooldown Stream Conflict', () => { conflictCooldowns.delete(userId); });
+                    await safeReply(ctx, `⚠️ Stream Conflict (515) — percobaan ke-${conflictCount + 1}\n\nWA mendeteksi koneksi ganda.\nCooldown: ${Math.ceil(cooldownMs / 1000)} detik\n\nPenyebab umum:\n• Bot di-restart terlalu cepat\n• Ada instance bot lain aktif\n• Session belum dilepas server WA`);
+                    await liveCountdown(ctx, cooldownMs, 'Cooldown Stream Conflict', () => {
+                        conflictCooldowns.delete(userId);
+                        // Setelah cooldown, reset reconnect counter untuk 515
+                        if ((reconnectAttempts.get(userId) || 0) > 0) {
+                            reconnectAttempts.delete(userId);
+                        }
+                    });
                     return;
                 }
                 if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
                     sock.ev.removeAllListeners();
                     userSessions.delete(userId);
                     reconnectAttempts.delete(userId);
-                    await safeReply(ctx, `🚫 Session ditolak WhatsApp.\n\nLogin ulang diperlukan.\nTekan 🔑 Login WhatsApp`);
+                    // AUTO hapus auth folder saat 401 — Railway production ready
+                    await clearAuthFolder(userId, '401-logged-out');
+                    await safeReply(ctx, `🚫 Session ditolak WhatsApp.\n\n_Auth lama dihapus otomatis._\nTekan 🔑 Login WhatsApp untuk scan QR baru.`);
                     return;
                 }
                 if (attempts <= MAX_RECONNECT_ATTEMPTS) {
@@ -2009,8 +2086,51 @@ http.createServer((req, res) => {
     console.log(`🌐 Health check aktif di port ${PORT}`);
 });
 
+// ========== STARTUP AUTH INTEGRITY CHECK ==========
+// Jalan saat bot start — bersihkan auth folder corrupt tanpa hapus yang valid
+async function runStartupAuthCheck() {
+    try {
+        if (!fs.existsSync(AUTH_BASE_FOLDER)) return;
+        const folders = fs.readdirSync(AUTH_BASE_FOLDER);
+        let cleaned = 0;
+        for (const folder of folders) {
+            const folderPath = path.join(AUTH_BASE_FOLDER, folder);
+            try {
+                const stat = fs.statSync(folderPath);
+                if (!stat.isDirectory()) continue;
+                const files = fs.readdirSync(folderPath);
+                let isCorrupt = files.length === 0; // folder kosong = corrupt
+                if (!isCorrupt) {
+                    for (const file of files) {
+                        if (!file.endsWith('.json')) continue;
+                        try {
+                            const raw = fs.readFileSync(path.join(folderPath, file), 'utf-8');
+                            JSON.parse(raw);
+                        } catch (e) {
+                            isCorrupt = true;
+                            break;
+                        }
+                    }
+                }
+                if (isCorrupt) {
+                    fs.rmSync(folderPath, { recursive: true, force: true });
+                    cleaned++;
+                    log('INFO', 'Startup', `Auth folder corrupt dihapus: ${folder}`);
+                }
+            } catch (err) {
+                log('WARN', 'Startup', `Gagal cek folder ${folder}: ${err.message}`);
+            }
+        }
+        if (cleaned > 0) log('INFO', 'Startup', `Startup check selesai: ${cleaned} auth folder corrupt dihapus.`);
+        else log('INFO', 'Startup', `Startup check selesai: semua auth folder valid.`);
+    } catch (err) {
+        log('WARN', 'Startup', `Startup auth check gagal: ${err.message}`);
+    }
+}
+
 // ========== LAUNCH ==========
-tgBot.launch().then(() => {
+tgBot.launch().then(async () => {
+    await runStartupAuthCheck();
     console.log('\n╔══════════════════════════════════════════════════════════════╗');
     console.log('║          W A - K I C K E R   B O T   v 5 . 1 . 0            ║');
     console.log('║        G O D M O D E   E D I T I O N   (FULL FIXED)         ║');
