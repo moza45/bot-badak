@@ -161,7 +161,6 @@ const kickSelections = new Map();
 const loginLocks = new Map();
 const conflictCooldowns = new Map();
 const reconnectAttempts = new Map();
-const vcfPending = new Map();
 const CONFLICT_COOLDOWN_MS = 35000;
 const MAX_RECONNECT_ATTEMPTS = 3;
 const MAX_CONCURRENT_SESSIONS = 50;
@@ -973,7 +972,6 @@ async function startLogin(ctx, userId) {
             lastQR: null, qrBlocked: false,
             loggedIn: false, groupId: null, groupName: null, members: [],
             _groupPickerList: null,
-            _vcfGroupPickerList: null,
             createdAt: Date.now(),
             lastActivity: Date.now()
         };
@@ -1103,7 +1101,7 @@ const KB_PRE_LOGIN = {
 };
 const KB_MAIN = {
     reply_markup: {
-        keyboard: [[{ text: '📋 Daftar Grup' }, { text: '🎯 Pilih Grup' }], [{ text: '➕ Buat Grup WA' }, { text: '📥 Import VCF' }], [{ text: '🔴 Kick Menu' }, { text: '📡 Status' }], [{ text: '🚪 Logout WhatsApp' }]],
+        keyboard: [[{ text: '📋 Daftar Grup' }, { text: '🎯 Pilih Grup' }], [{ text: '➕ Buat Grup WA' }], [{ text: '🔴 Kick Menu' }, { text: '📡 Status' }], [{ text: '🚪 Logout WhatsApp' }]],
         resize_keyboard: true, one_time_keyboard: false
     }
 };
@@ -1115,7 +1113,7 @@ const KB_ADMIN_PRE = {
 };
 const KB_ADMIN_MAIN = {
     reply_markup: {
-        keyboard: [[{ text: '📋 Daftar Grup' }, { text: '🎯 Pilih Grup' }], [{ text: '➕ Buat Grup WA' }, { text: '📥 Import VCF' }], [{ text: '🔴 Kick Menu' }, { text: '📡 Status' }], [{ text: '📋 Pending Payment' }, { text: '👥 User List' }], [{ text: '🚪 Logout WhatsApp' }]],
+        keyboard: [[{ text: '📋 Daftar Grup' }, { text: '🎯 Pilih Grup' }], [{ text: '➕ Buat Grup WA' }], [{ text: '🔴 Kick Menu' }, { text: '📡 Status' }], [{ text: '📋 Pending Payment' }, { text: '👥 User List' }], [{ text: '🚪 Logout WhatsApp' }]],
         resize_keyboard: true, one_time_keyboard: false
     }
 };
@@ -1212,152 +1210,8 @@ async function showKickMenu(ctx, userId, session) {
     }
 }
 
-// ========== VCF PARSER ==========
-function decodeQP(str) {
-    return str.replace(/=([0-9A-F]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
-}
 
-function normalizePhone(raw) {
-    const hasPlus = raw.trimStart().startsWith('+');
-    let digits = raw.replace(/\D/g, '');
-    if (!digits) return null;
-    if (hasPlus || digits.startsWith('00')) {
-        const withCC = hasPlus ? digits : digits.slice(2);
-        if (withCC.length >= 7) return withCC;
-    }
-    if (digits.startsWith('0')) return '62' + digits.slice(1);
-    if (digits.startsWith('62')) return digits;
-    if (digits.length >= 9) return '62' + digits;
-    return digits.length >= 7 ? digits : null;
-}
 
-function parseVCF(vcfText) {
-    const contacts = [];
-    const seen = new Set();
-    const blocks = vcfText.split(/END:VCARD/i).map(b => b.trim()).filter(Boolean);
-    for (const block of blocks) {
-        let name = 'Tanpa Nama';
-        const fnMatch = block.match(/^FN[;:][^\r\n]*/mi);
-        const nMatch = block.match(/^N[;:][^\r\n]*/mi);
-        if (fnMatch) {
-            const qpMatch = fnMatch[0].match(/ENCODING=QUOTED-PRINTABLE.*?:(.*)/i);
-            if (qpMatch) {
-                try { name = decodeQP(qpMatch[1].trim()); } catch (err) {}
-            } else {
-                name = fnMatch[0].replace(/^FN.*?:/i, '').trim();
-            }
-        } else if (nMatch) {
-            const raw = nMatch[0].replace(/^N.*?:/i, '').trim();
-            const parts = raw.split(';').map(p => p.trim()).filter(Boolean);
-            name = parts.slice(0, 2).reverse().join(' ').trim() || 'Tanpa Nama';
-        }
-        name = name.replace(/[\x00-\x1F]/g, '').trim() || 'Tanpa Nama';
-        const telLines = block.match(/^TEL[^\r\n]*/gim) || [];
-        for (const telLine of telLines) {
-            let num = telLine.replace(/^TEL[^:]*:/i, '').replace(/[\s\-().]/g, '').trim();
-            if (!num) continue;
-            num = normalizePhone(num);
-            if (!num) continue;
-            if (seen.has(num)) continue;
-            seen.add(num);
-            contacts.push({ name, phone: num });
-        }
-    }
-    return contacts;
-}
-
-async function addContactsToGroup(ctx, userId, contacts, groupId, groupName) {
-    touchSession(userId);
-    const session = userSessions.get(userId);
-    if (!session || !session.loggedIn) {
-        return safeReply(ctx, '❌ Session WA berakhir. Tekan 🔑 Login WhatsApp.');
-    }
-
-    const total = contacts.length;
-    let berhasil = 0, gagal = 0, notWA = 0;
-    const statusMsg = await safeReply(ctx, `⏳ Menambahkan ${total} kontak ke grup...\n\n⚠️ Proses berjalan lambat dan natural untuk keamanan WA.`);
-
-    // Mood engine — berubah tiap beberapa aksi seperti manusia ganti pace
-    let mood = getSessionMood();
-    let actionsSinceMoodChange = 0;
-    let moodChangeTrigger = 4 + Math.floor(Math.random() * 5); // ganti tiap 4-8 aksi
-
-    for (let i = 0; i < contacts.length; i++) {
-        // Cek session masih aktif
-        const currentSession = userSessions.get(userId);
-        if (!currentSession || !currentSession.loggedIn) {
-            await safeReply(ctx, `⚠️ Session WA terputus di tengah proses.\n\n✅ Berhasil: ${berhasil}\n📵 No WA: ${notWA}\n❌ Error/Belum: ${total - berhasil - notWA}\n\nLogin ulang dan coba lagi.`);
-            vcfPending.delete(userId);
-            return;
-        }
-
-        // Ganti mood secara alami
-        actionsSinceMoodChange++;
-        if (actionsSinceMoodChange >= moodChangeTrigger) {
-            mood = getSessionMood();
-            actionsSinceMoodChange = 0;
-            moodChangeTrigger = 4 + Math.floor(Math.random() * 5);
-            log('INFO', 'Add', `Mood berubah → ${mood}`);
-        }
-
-        const c = contacts[i];
-        try {
-            const [result] = await currentSession.sock.onWhatsApp(c.phone);
-            if (!result || !result.exists) {
-                notWA++;
-                log('INFO', 'Add', `${c.phone} => No WA`);
-                // Skip juga perlu jeda kecil — manusia tetap scroll/lihat
-                if (i + 1 < contacts.length) await humanDelayNatural(3, 8);
-                continue;
-            }
-
-            await simulateReadAndType(currentSession.sock, groupId, true);
-            await currentSession.sock.groupParticipantsUpdate(groupId, [result.jid], 'add');
-            berhasil++;
-            log('INFO', 'Add', `✅ ${c.name} (${c.phone}) berhasil ditambahkan [${mood}]`);
-
-            // Update progress
-            try {
-                await ctx.telegram.editMessageText(
-                    ctx.chat.id, statusMsg.message_id, null,
-                    `⏳ Progres: ${i + 1}/${total}\n✅ Berhasil: ${berhasil} | 📵 No WA: ${notWA} | ❌ Error: ${gagal}\n\n_Mood: ${mood}_`
-                );
-            } catch (_) {}
-
-            if (i + 1 < contacts.length) {
-                // 10% kemungkinan istirahat panjang — seperti orang berhenti sebentar
-                if (Math.random() < 0.10) {
-                    try {
-                        await ctx.telegram.editMessageText(
-                            ctx.chat.id, statusMsg.message_id, null,
-                            `⏸️ Jeda sejenak... (${berhasil} dari ${total} selesai)\n✅ Berhasil: ${berhasil} | 📵 No WA: ${notWA}\n\n_Ini normal, menghindari deteksi WA._`
-                        );
-                    } catch (_) {}
-                    await humanDelayLongBreak('add-break');
-                    // Reset mood setelah break
-                    mood = getSessionMood();
-                    actionsSinceMoodChange = 0;
-                } else {
-                    await humanDelayAdd(mood);
-                }
-            }
-
-        } catch (err) {
-            gagal++;
-            log('ERROR', 'Add', `${c.phone}: ${err.message}`, err);
-            if (err.message && (err.message.includes('Connection Closed') || err.message.includes('Connection Lost'))) {
-                await safeReply(ctx, `🔴 Koneksi WA terputus saat proses.\n\n✅ Berhasil: ${berhasil}\n📵 No WA: ${notWA}\n❌ Gagal/Belum: ${total - berhasil - notWA}\n\nTekan 🔑 Login WhatsApp untuk login ulang.`);
-                vcfPending.delete(userId);
-                return;
-            }
-            await humanDelayError();
-        }
-    }
-
-    const hasil = `╔${DIVIDER}╗\n║  HASIL IMPORT VCF\n╚${DIVIDER}╝\n\n🎯 Grup: ${esc(groupName)}\n\n${DIVIDER_THIN}\n✅ Berhasil ditambah: ${berhasil} kontak\n📵 Tidak punya WA: ${notWA} kontak\n❌ Error: ${gagal} kontak\n`;
-    await safeReply(ctx, hasil);
-    vcfPending.delete(userId);
-}
 
 // ========== SHOW PRICE MENU ==========
 async function showPriceMenu(ctx) {
@@ -1504,7 +1358,6 @@ tgBot.command('logout', requireAccess, async (ctx) => {
         reconnectAttempts.delete(userId);
         conflictCooldowns.delete(userId);
         loginLocks.delete(userId);
-        vcfPending.delete(userId);
         await safeReply(ctx, '✅ Logout berhasil.', { ...KB_PRE_LOGIN });
     } catch (err) {
         await safeReply(ctx, `❌ Error: ${esc(err.message)}`);
@@ -1573,37 +1426,6 @@ tgBot.command('buatgrup', requireAccess, async (ctx) => {
     }
 });
 
-tgBot.command('importvcf', requireAccess, async (ctx) => {
-    const userId = ctx.from.id;
-    const session = userSessions.get(userId);
-    if (!session || !session.loggedIn) return safeReply(ctx, '❌ Login dulu!');
-    const fetchAnim = await spinnerMessage(ctx, 'Mengambil daftar grup...');
-    try {
-        const chats = await session.sock.groupFetchAllParticipating();
-        const groups = Object.values(chats);
-        if (groups.length === 0) {
-            await fetchAnim.stop(`❌ Tidak ada grup ditemukan.`);
-            return;
-        }
-        const isTrial = await isTrialOnly(userId);
-        const displayGroups = isTrial ? groups.slice(0, 1) : groups;
-        session._vcfGroupPickerList = displayGroups;
-        const buttons = displayGroups.map((g, i) => {
-            const memberCount = g.participants?.length || 0;
-            const label = `${i + 1}. ${g.subject} (${memberCount} 👥)`.substring(0, 64);
-            return [Markup.button.callback(label, `vcfgrp_${i}`)];
-        });
-        buttons.push([Markup.button.callback('❌ Batal', 'vcfgrp_cancel')]);
-        await fetchAnim.stop(null);
-        let header = `╔${DIVIDER}╗\n║  PILIH GRUP TUJUAN VCF\n╚${DIVIDER}╝\n\n`;
-        if (isTrial) header += `⚠️ _Trial: hanya 1 grup_\n\n`;
-        header += `Pilih grup yang akan ditambahkan kontaknya:`;
-        await safeReply(ctx, header, { reply_markup: { inline_keyboard: buttons } });
-    } catch (err) {
-        await fetchAnim.stop(`❌ Error: ${esc(err.message)}`);
-    }
-});
-
 tgBot.command('status', requireAccess, async (ctx) => {
     const userId = ctx.from.id;
     const session = userSessions.get(userId);
@@ -1645,10 +1467,7 @@ function getHelpText(contact) {
         "   Tekan Daftar Grup atau Pilih Grup",
         "   Ketuk nama grup dari daftar",
         "",
-        "4. Import VCF",
-        "   Tekan Import VCF, pilih grup, kirim file .vcf",
-        "",
-        "5. Kick Anggota",
+        "4. Kick Anggota",
         "   Tekan Kick Menu, centang anggota, tekan Kick",
         "",
         "PENTING:",
@@ -1826,37 +1645,6 @@ tgBot.hears('➕ Buat Grup WA', requireAccess, async (ctx) => {
     await safeReply(ctx, `Format: /buatgrup "Nama Grup"\n\nContoh: /buatgrup "Arisan RT 05"`);
 });
 
-tgBot.hears('📥 Import VCF', requireAccess, async (ctx) => {
-    const userId = ctx.from.id;
-    const session = userSessions.get(userId);
-    if (!session || !session.loggedIn) return safeReply(ctx, '❌ Login dulu!');
-    const fetchAnim = await spinnerMessage(ctx, 'Mengambil daftar grup...');
-    try {
-        const chats = await session.sock.groupFetchAllParticipating();
-        const groups = Object.values(chats);
-        if (groups.length === 0) {
-            await fetchAnim.stop(`❌ Tidak ada grup ditemukan.`);
-            return;
-        }
-        const isTrial = await isTrialOnly(userId);
-        const displayGroups = isTrial ? groups.slice(0, 1) : groups;
-        session._vcfGroupPickerList = displayGroups;
-        const buttons = displayGroups.map((g, i) => {
-            const memberCount = g.participants?.length || 0;
-            const label = `${i + 1}. ${g.subject} (${memberCount} 👥)`.substring(0, 64);
-            return [Markup.button.callback(label, `vcfgrp_${i}`)];
-        });
-        buttons.push([Markup.button.callback('❌ Batal', 'vcfgrp_cancel')]);
-        await fetchAnim.stop(null);
-        let header = `╔${DIVIDER}╗\n║  PILIH GRUP TUJUAN VCF\n╚${DIVIDER}╝\n\n`;
-        if (isTrial) header += `⚠️ _Trial: hanya 1 grup_\n\n`;
-        header += `Pilih grup yang akan ditambahkan kontaknya:`;
-        await safeReply(ctx, header, { reply_markup: { inline_keyboard: buttons } });
-    } catch (err) {
-        await fetchAnim.stop(`❌ Error: ${esc(err.message)}`);
-    }
-});
-
 tgBot.hears('🔴 Kick Menu', requireAccess, async (ctx) => {
     const userId = ctx.from.id;
     const session = userSessions.get(userId);
@@ -1891,7 +1679,6 @@ tgBot.hears('🚪 Logout WhatsApp', requireAccess, async (ctx) => {
         reconnectAttempts.delete(userId);
         conflictCooldowns.delete(userId);
         loginLocks.delete(userId);
-        vcfPending.delete(userId);
         await safeReply(ctx, '✅ Logout berhasil.', { ...KB_PRE_LOGIN });
     } catch (err) {
         await safeReply(ctx, `❌ Error: ${esc(err.message)}`);
@@ -1944,42 +1731,6 @@ tgBot.hears('👥 User List', async (ctx) => {
     await safeReply(ctx, msg);
 });
 
-// ========== DOCUMENT HANDLER (VCF) ==========
-tgBot.on('document', requireAccess, async (ctx) => {
-    const userId = ctx.from.id;
-    const pending = vcfPending.get(userId);
-    if (!pending || !pending.waitingFile) return;
-    const doc = ctx.message.document;
-    const fname = doc.file_name || '';
-    if (!fname.toLowerCase().endsWith('.vcf')) {
-        return safeReply(ctx, '⚠️ File harus .vcf');
-    }
-    const MAX_VCF_SIZE = 5 * 1024 * 1024; // 5MB
-    if (doc.file_size && doc.file_size > MAX_VCF_SIZE) {
-        vcfPending.delete(userId);
-        return safeReply(ctx, `❌ File terlalu besar (${Math.round(doc.file_size/1024)}KB). Maks 5MB.`);
-    }
-    await safeReply(ctx, '⏳ Membaca file VCF...');
-    try {
-        const fileLink = await ctx.telegram.getFileLink(doc.file_id);
-        const resp = await fetch(fileLink.href);
-        const vcfText = await resp.text();
-        const contacts = parseVCF(vcfText);
-        if (contacts.length === 0) {
-            vcfPending.delete(userId);
-            return safeReply(ctx, '❌ Tidak ada nomor valid.');
-        }
-        pending.contacts = contacts;
-        pending.waitingFile = false;
-        vcfPending.set(userId, pending);
-        const keyboard = Markup.inlineKeyboard([[Markup.button.callback(`✅ Tambah Semua (${contacts.length})`, 'vcf_add_all')], [Markup.button.callback('❌ Batal', 'vcf_cancel')]]);
-        await safeReply(ctx, `📊 ${contacts.length} kontak ditemukan.\n🎯 Grup tujuan: ${pending.groupName}\n\nTambahkan sekarang?`, { ...keyboard });
-    } catch (err) {
-        vcfPending.delete(userId);
-        await safeReply(ctx, `❌ Error: ${esc(err.message)}`);
-    }
-});
-
 // ========== INLINE BUTTON HANDLERS ==========
 tgBot.action(/^selectgrp_(\d+|cancel)$/, requireAccess, async (ctx) => {
     const userId = ctx.from.id;
@@ -2004,44 +1755,6 @@ tgBot.action(/^selectgrp_(\d+|cancel)$/, requireAccess, async (ctx) => {
     session._groupPickerList = null;
     const memberCount = target.participants?.length || 0;
     await ctx.editMessageText(`✅ Grup terpilih!\n\n🎯 ${esc(target.subject)}\n👥 ${memberCount} anggota\n\nTekan 🔴 Kick Menu untuk mulai.`);
-});
-
-tgBot.action(/^vcfgrp_(\d+|cancel)$/, requireAccess, async (ctx) => {
-    const userId = ctx.from.id;
-    await ctx.answerCbQuery();
-    const param = ctx.match[1];
-    const session = userSessions.get(userId);
-    if (param === 'cancel') {
-        if (session) session._vcfGroupPickerList = null;
-        return ctx.editMessageText('✖ Import VCF dibatalkan.');
-    }
-    if (!session || !session.loggedIn) {
-        return ctx.editMessageText('❌ Session habis. Login ulang.');
-    }
-    const idx = parseInt(param);
-    const groupList = session._vcfGroupPickerList;
-    if (!groupList || isNaN(idx) || idx < 0 || idx >= groupList.length) {
-        return ctx.editMessageText('❌ Data grup tidak ditemukan. Coba lagi.');
-    }
-    const target = groupList[idx];
-    session._vcfGroupPickerList = null;
-    vcfPending.set(userId, { waitingFile: true, groupId: target.id, groupName: target.subject });
-    await ctx.editMessageText(`✅ Grup tujuan VCF dipilih!\n\n🎯 ${esc(target.subject)}\n👥 ${target.participants?.length || 0} anggota\n\n📎 Sekarang kirim file .vcf ke chat ini.`);
-});
-
-tgBot.action('vcf_add_all', async (ctx) => {
-    const userId = ctx.from.id;
-    if (!await canUseBot(userId)) return ctx.answerCbQuery('⛔ Ditolak.');
-    await ctx.answerCbQuery();
-    const pending = vcfPending.get(userId);
-    if (!pending || !pending.contacts) return safeReply(ctx, '❌ Data tidak ditemukan.');
-    await addContactsToGroup(ctx, userId, pending.contacts, pending.groupId, pending.groupName);
-});
-
-tgBot.action('vcf_cancel', async (ctx) => {
-    vcfPending.delete(ctx.from.id);
-    await ctx.answerCbQuery('Dibatalkan');
-    await safeReply(ctx, '✖ Import dibatalkan.');
 });
 
 tgBot.action(/^toggle_(.+)$/, async (ctx) => {
