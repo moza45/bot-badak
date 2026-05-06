@@ -36,10 +36,10 @@ if (ADMIN_IDS.length === 0) {
 
 const BOT_NAME             = process.env.BOT_NAME || '⚡ WA Kicker Bot';
 const PAYMENT_BANK_NAME    = process.env.PAYMENT_BANK_NAME   || 'SEA';
-const PAYMENT_BANK_NUMBER  = process.env.PAYMENT_BANK_NUMBER || '1234567890';
+const PAYMENT_BANK_NUMBER  = process.env.PAYMENT_BANK_NUMBER || '901542678431';
 const PAYMENT_BANK_HOLDER  = process.env.PAYMENT_BANK_HOLDER || 'Bot Owner';
-const PAYMENT_DANA         = process.env.PAYMENT_DANA        || '081234567890';
-const PAYMENT_CONTACT      = process.env.PAYMENT_CONTACT     || '@adminusername';
+const PAYMENT_DANA         = process.env.PAYMENT_DANA        || '083195510279';
+const PAYMENT_CONTACT      = process.env.PAYMENT_CONTACT     || '@Bryan3797';
 const TRIAL_DURATION_HOURS = parseInt(process.env.TRIAL_DURATION_HOURS || '24');
 const KICK_LIMIT_PER_SESSION = parseInt(process.env.KICK_LIMIT || '20');
 const HEALTH_API_KEY = process.env.HEALTH_API_KEY || crypto.randomBytes(16).toString('hex');
@@ -443,9 +443,9 @@ async function humanDelay(minMs = 1200, maxMs = 3800) {
 async function humanDelayKick() {
     const r = Math.random();
     let delaySec;
-    if (r < 0.3) delaySec = 12 + Math.random() * 6;
-    else if (r < 0.7) delaySec = 20 + Math.random() * 10;
-    else delaySec = 32 + Math.random() * 13;
+    if (r < 0.3) delaySec = 26 + Math.random() * 15;
+    else if (r < 0.7) delaySec = 33 + Math.random() * 20;
+    else delaySec = 41 + Math.random() * 28;
     delaySec = delaySec * (0.9 + Math.random() * 0.2);
     log('INFO', 'HumanDelay', `Jeda antar kick: ${Math.round(delaySec)} detik`);
     return new Promise(r => setTimeout(r, Math.floor(delaySec * 1000)));
@@ -454,10 +454,12 @@ async function humanDelayKick() {
 async function humanDelayAdd() {
     const r = Math.random();
     let delaySec;
-    if (r < 0.4) delaySec = 8 + Math.random() * 7;
-    else if (r < 0.8) delaySec = 16 + Math.random() * 6;
-    else delaySec = 23 + Math.random() * 3;
-    delaySec = delaySec * (0.85 + Math.random() * 0.3);
+    // Delay lebih panjang untuk menghindari ban WA
+    if (r < 0.3) delaySec = 41 + Math.random() * 26;       // 20-35 detik (slow)
+    else if (r < 0.65) delaySec = 51 + Math.random() * 39; // 35-55 detik (normal)
+    else if (r < 0.9) delaySec = 72 + Math.random() * 43;  // 55-85 detik (safe)
+    else delaySec = 122 + Math.random() * 98;                // 90-150 detik (very safe, sesekali)
+    delaySec = delaySec * (0.9 + Math.random() * 0.2);
     log('INFO', 'HumanDelay', `Jeda antar add: ${Math.round(delaySec)} detik`);
     return new Promise(r => setTimeout(r, Math.floor(delaySec * 1000)));
 }
@@ -1070,28 +1072,63 @@ async function addContactsToGroup(ctx, userId, contacts, groupId, groupName) {
         return safeReply(ctx, '❌ Session WA berakhir. Tekan 🔑 Login WhatsApp.');
     }
     const total = contacts.length;
-    let berhasil = 0, gagal = 0, notWA = 0;
-    const statusMsg = await safeReply(ctx, `⏳ Menambahkan ${total} kontak ke grup...`);
+    let berhasil = 0, gagal = 0, notWA = 0, skipped = 0;
+    const statusMsg = await safeReply(ctx, `⏳ Menambahkan ${total} kontak ke grup...\n\n_Proses berjalan pelan untuk menghindari ban WA._`);
+    
     for (let i = 0; i < contacts.length; i++) {
+        // Cek ulang session setiap iterasi
+        const currentSession = userSessions.get(userId);
+        if (!currentSession || !currentSession.loggedIn) {
+            log('WARN', 'Add', 'Session hilang saat proses add, berhenti.');
+            await safeReply(ctx, `⚠️ Proses add terhenti — session WA terputus.\n✅ Berhasil: ${berhasil} | ❌ Error: ${gagal} | 📵 No WA: ${notWA}\n\nLogin ulang lalu lanjut manual.`);
+            vcfPending.delete(userId);
+            return;
+        }
+
         const c = contacts[i];
         try {
-            const [result] = await session.sock.onWhatsApp(c.phone);
+            // Timeout untuk onWhatsApp check (15 detik)
+            const checkPromise = currentSession.sock.onWhatsApp(c.phone);
+            const timeoutPromise = new Promise((_, rej) => setTimeout(() => rej(new Error('Check timeout')), 15000));
+            const [result] = await Promise.race([checkPromise, timeoutPromise]);
+            
             if (!result || !result.exists) {
                 notWA++;
                 log('INFO', 'Add', `${c.phone} => No WA`);
                 continue;
             }
-            await simulateReadAndType(session.sock, groupId, true);
-            await session.sock.groupParticipantsUpdate(groupId, [result.jid], 'add');
+            await simulateReadAndType(currentSession.sock, groupId, true);
+            await currentSession.sock.groupParticipantsUpdate(groupId, [result.jid], 'add');
             berhasil++;
             log('INFO', 'Add', `✅ ${c.name} (${c.phone}) berhasil ditambahkan`);
             if (i + 1 < contacts.length) await humanDelayAdd();
+            
+            // Update progress setiap kontak
             if ((i + 1) % 3 === 0 || i + 1 === total) {
                 try {
-                    await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, null, `⏳ Progres: ${i + 1}/${total}\n✅ Berhasil: ${berhasil} | 📵 No WA: ${notWA}`);
+                    await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, null, 
+                        `⏳ Progres: ${i + 1}/${total}\n✅ Berhasil: ${berhasil} | 📵 No WA: ${notWA} | ❌ Error: ${gagal}`);
                 } catch (err) {}
             }
+            
+            // Jeda batch tiap 5 kontak berhasil (anti-ban)
+            if (berhasil > 0 && berhasil % 5 === 0 && i + 1 < contacts.length) {
+                log('INFO', 'Add', `Pause batch setelah ${berhasil} add berhasil...`);
+                try {
+                    await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, null,
+                        `⏸️ Jeda batch (${berhasil} berhasil)...\n\n_Menunggu sejenak untuk keamanan akun WA..._`);
+                } catch (err) {}
+                await humanDelayBatchPause();
+            }
         } catch (err) {
+            // Connection Closed: session mati, hentikan proses
+            if (err.message && (err.message.includes('Connection Closed') || err.message.includes('Connection closed'))) {
+                log('ERROR', 'Add', `Connection Closed saat add ${c.phone}, menghentikan proses.`);
+                userSessions.delete(userId);
+                await safeReply(ctx, `🔌 Koneksi WA terputus saat proses add.\n\n✅ Berhasil: ${berhasil} | ❌ Error: ${gagal} | 📵 No WA: ${notWA}\n\nSession telah direset. Tekan 🔑 Login WhatsApp untuk melanjutkan.`);
+                vcfPending.delete(userId);
+                return;
+            }
             gagal++;
             log('ERROR', 'Add', `${c.phone}: ${err.message}`, err);
             await humanDelayError();
@@ -1881,25 +1918,52 @@ http.createServer((req, res) => {
 });
 
 // ========== LAUNCH ==========
-tgBot.launch().then(() => {
-    console.log('\n╔══════════════════════════════════════════════════════════════╗');
-    console.log('║          W A - K I C K E R   B O T   v 5 . 1 . 0            ║');
-    console.log('║        G O D M O D E   E D I T I O N   (FULL FIXED)         ║');
-    console.log('╠══════════════════════════════════════════════════════════════╣');
-    console.log(`║  Admin IDs      : ${ADMIN_IDS.join(', ')}`);
-    console.log(`║  Trial          : ${TRIAL_DURATION_HOURS} jam`);
-    console.log(`║  Kick Limit     : ${KICK_LIMIT_PER_SESSION} per sesi`);
-    console.log(`║  Database       : JSON (${DATA_DIR})`);
-    console.log(`║  Session Cleanup: Auto (${SESSION_IDLE_MS / 3600000} jam idle)`);
-    console.log(`║  Health Auth    : Enabled (API Key required)`);
-    console.log('╚══════════════════════════════════════════════════════════════╝\n');
-}).catch(err => {
-    console.error('❌ Gagal launch bot:', err.message);
-    log('ERROR', 'Launch', 'Bot gagal start', err);
-    process.exit(1);
-});
+async function launchBot(retryCount = 0) {
+    const MAX_LAUNCH_RETRIES = 5;
+    try {
+        await tgBot.launch();
+        console.log('\n╔══════════════════════════════════════════════════════════════╗');
+        console.log('║          W A - K I C K E R   B O T   v 5 . 1 . 0            ║');
+        console.log('║        G O D M O D E   E D I T I O N   (FULL FIXED)         ║');
+        console.log('╠══════════════════════════════════════════════════════════════╣');
+        console.log(`║  Admin IDs      : ${ADMIN_IDS.join(', ')}`);
+        console.log(`║  Trial          : ${TRIAL_DURATION_HOURS} jam`);
+        console.log(`║  Kick Limit     : ${KICK_LIMIT_PER_SESSION} per sesi`);
+        console.log(`║  Database       : JSON (${DATA_DIR})`);
+        console.log(`║  Session Cleanup: Auto (${SESSION_IDLE_MS / 3600000} jam idle)`);
+        console.log(`║  Health Auth    : Enabled (API Key required)`);
+        console.log('╚══════════════════════════════════════════════════════════════╝\n');
+    } catch (err) {
+        log('ERROR', 'Launch', `Bot gagal start (percobaan ${retryCount + 1}/${MAX_LAUNCH_RETRIES}): ${err.message}`, err);
+        if (retryCount < MAX_LAUNCH_RETRIES - 1) {
+            const delayMs = Math.min(5000 * Math.pow(2, retryCount), 60000);
+            console.error(`🔄 Retry launch dalam ${Math.round(delayMs/1000)} detik...`);
+            await new Promise(r => setTimeout(r, delayMs));
+            return launchBot(retryCount + 1);
+        } else {
+            console.error('❌ Bot gagal start setelah semua percobaan. Keluar...');
+            process.exit(1);
+        }
+    }
+}
 
-process.on('SIGINT', () => { tgBot.stop('SIGINT'); process.exit(); });
-process.on('SIGTERM', () => { tgBot.stop('SIGTERM'); process.exit(); });
+launchBot();
+
+async function gracefulShutdown(signal) {
+    console.log(`\n⛔ Menerima ${signal}, menutup bot dengan bersih...`);
+    tgBot.stop(signal);
+    // Tutup semua session WA
+    for (const [userId, session] of userSessions.entries()) {
+        try {
+            if (session.sock) session.sock.end(new Error('shutdown'));
+        } catch (e) {}
+    }
+    userSessions.clear();
+    console.log('✅ Bot ditutup dengan bersih.');
+    process.exit(0);
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('uncaughtException', (err) => { log('ERROR', 'System', 'Uncaught Exception', err); });
 process.on('unhandledRejection', (reason) => { log('ERROR', 'System', 'Unhandled Rejection', reason); });
