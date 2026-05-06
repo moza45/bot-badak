@@ -75,7 +75,14 @@ function readJSON(filePath, defaultVal = {}) {
 }
 
 function writeJSON(filePath, data) {
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+    const tmp = filePath + '.tmp';
+    try {
+        fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
+        fs.renameSync(tmp, filePath);
+    } catch (err) {
+        try { fs.unlinkSync(tmp); } catch (_) {}
+        throw err;
+    }
 }
 
 class UserDatabase {
@@ -245,6 +252,10 @@ setInterval(async () => {
         log('WARN', 'Cleanup', `Melebihi batas session (${userSessions.size}), cleanup forced`);
         const oldest = [...userSessions.entries()].sort((a, b) => (a[1].createdAt || 0) - (b[1].createdAt || 0))[0];
         if (oldest) await destroySession(oldest[0]);
+    }
+    // Bersihkan rateLimitMap yang sudah expired (anti memory leak)
+    for (const [uid, entry] of rateLimitMap.entries()) {
+        if (now > entry.resetAt + 60000) rateLimitMap.delete(uid);
     }
 }, 30 * 60 * 1000);
 
@@ -931,6 +942,7 @@ async function requireAccess(ctx, next) {
 
 // ========== GROUP & KICK MENU ==========
 async function showGroupPicker(ctx, userId, session) {
+    touchSession(userId);
     const fetchAnim = await spinnerMessage(ctx, 'Mengambil daftar grup...');
     try {
         const chats = await session.sock.groupFetchAllParticipating();
@@ -970,6 +982,7 @@ function buildMemberKeyboard(members, selected) {
 }
 
 async function showKickMenu(ctx, userId, session) {
+    touchSession(userId);
     const fetchAnim = await spinnerMessage(ctx, 'Mengambil daftar anggota...');
     try {
         const metadata = await session.sock.groupMetadata(session.groupId);
@@ -1051,6 +1064,7 @@ function parseVCF(vcfText) {
 }
 
 async function addContactsToGroup(ctx, userId, contacts, groupId, groupName) {
+    touchSession(userId);
     const session = userSessions.get(userId);
     if (!session || !session.loggedIn) {
         return safeReply(ctx, '❌ Session WA berakhir. Tekan 🔑 Login WhatsApp.');
@@ -1178,6 +1192,7 @@ tgBot.action(/^admin_approve_(\d+)_(\w+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const targetId = parseInt(ctx.match[1]);
     const pkgKey = ctx.match[2];
+    if (!PACKAGES[pkgKey]) return ctx.editMessageText(`❌ Paket tidak valid: ${pkgKey}`);
     const result = await approvePayment(targetId, pkgKey);
     if (!result.success) return ctx.editMessageText(`❌ Gagal: ${result.reason}`);
     await ctx.editMessageText(`✅ APPROVED!\nID: ${targetId}\nPaket: ${result.pkg.label}\nAktif hingga: ${formatDate(result.expiresAt.toISOString())}`);
@@ -1232,6 +1247,7 @@ tgBot.command('logout', requireAccess, async (ctx) => {
         reconnectAttempts.delete(userId);
         conflictCooldowns.delete(userId);
         loginLocks.delete(userId);
+        vcfPending.delete(userId);
         await safeReply(ctx, '✅ Logout berhasil.', { ...KB_PRE_LOGIN });
     } catch (err) {
         await safeReply(ctx, `❌ Error: ${esc(err.message)}`);
@@ -1283,6 +1299,7 @@ tgBot.command('buatgrup', requireAccess, async (ctx) => {
     if (!session || !session.loggedIn) return safeReply(ctx, '❌ *Login dulu!*');
     const namaGrup = ctx.message.text.replace('/buatgrup', '').trim().replace(/^["']|["']$/g, '');
     if (!namaGrup) return safeReply(ctx, 'Format: /buatgrup "Nama Grup"');
+    if (namaGrup.length > 100) return safeReply(ctx, `❌ Nama grup terlalu panjang (${namaGrup.length} karakter). Maks 100 karakter.`);
     await safeReply(ctx, `⏳ *Membuat grup "${namaGrup}"...*`);
     try {
         const result = await session.sock.groupCreate(namaGrup, []);
@@ -1617,6 +1634,7 @@ tgBot.hears('🚪 Logout WhatsApp', requireAccess, async (ctx) => {
         reconnectAttempts.delete(userId);
         conflictCooldowns.delete(userId);
         loginLocks.delete(userId);
+        vcfPending.delete(userId);
         await safeReply(ctx, '✅ Logout berhasil.', { ...KB_PRE_LOGIN });
     } catch (err) {
         await safeReply(ctx, `❌ Error: ${esc(err.message)}`);
@@ -1679,6 +1697,11 @@ tgBot.on('document', requireAccess, async (ctx) => {
     if (!fname.toLowerCase().endsWith('.vcf')) {
         return safeReply(ctx, '⚠️ File harus .vcf');
     }
+    const MAX_VCF_SIZE = 5 * 1024 * 1024; // 5MB
+    if (doc.file_size && doc.file_size > MAX_VCF_SIZE) {
+        vcfPending.delete(userId);
+        return safeReply(ctx, `❌ File terlalu besar (${Math.round(doc.file_size/1024)}KB). Maks 5MB.`);
+    }
     await safeReply(ctx, '⏳ Membaca file VCF...');
     try {
         const fileLink = await ctx.telegram.getFileLink(doc.file_id);
@@ -1715,7 +1738,7 @@ tgBot.action(/^selectgrp_(\d+|cancel)$/, requireAccess, async (ctx) => {
     }
     const idx = parseInt(param);
     const groupList = session._groupPickerList;
-    if (!groupList || idx >= groupList.length) {
+    if (!groupList || isNaN(idx) || idx < 0 || idx >= groupList.length) {
         return ctx.editMessageText('❌ Data grup tidak ditemukan. Coba lagi.');
     }
     const target = groupList[idx];
@@ -1740,7 +1763,7 @@ tgBot.action(/^vcfgrp_(\d+|cancel)$/, requireAccess, async (ctx) => {
     }
     const idx = parseInt(param);
     const groupList = session._vcfGroupPickerList;
-    if (!groupList || idx >= groupList.length) {
+    if (!groupList || isNaN(idx) || idx < 0 || idx >= groupList.length) {
         return ctx.editMessageText('❌ Data grup tidak ditemukan. Coba lagi.');
     }
     const target = groupList[idx];
@@ -1767,6 +1790,7 @@ tgBot.action('vcf_cancel', async (ctx) => {
 tgBot.action(/^toggle_(.+)$/, async (ctx) => {
     const userId = ctx.from.id;
     if (!await canUseBot(userId)) return ctx.answerCbQuery('⛔ Ditolak.');
+    touchSession(userId);
     const jid = ctx.match[1];
     const session = userSessions.get(userId);
     if (!session || !kickSelections.has(userId)) return ctx.answerCbQuery('Session expired.');
@@ -1785,6 +1809,7 @@ tgBot.action('do_kick', async (ctx) => {
     const userId = ctx.from.id;
     if (!await canUseBot(userId)) return ctx.answerCbQuery('⛔ Ditolak.');
     await ctx.answerCbQuery();
+    touchSession(userId);
     if (!isAdmin(userId) && !isActiveHours()) {
         return safeReply(ctx, `⚠️ Untuk keamanan akun WA, kick hanya bisa dilakukan jam 08.00 - 22.00 WIB.\n\n_Ini untuk menghindari deteksi otomatis dari WhatsApp._`);
     }
@@ -1868,6 +1893,10 @@ tgBot.launch().then(() => {
     console.log(`║  Session Cleanup: Auto (${SESSION_IDLE_MS / 3600000} jam idle)`);
     console.log(`║  Health Auth    : Enabled (API Key required)`);
     console.log('╚══════════════════════════════════════════════════════════════╝\n');
+}).catch(err => {
+    console.error('❌ Gagal launch bot:', err.message);
+    log('ERROR', 'Launch', 'Bot gagal start', err);
+    process.exit(1);
 });
 
 process.on('SIGINT', () => { tgBot.stop('SIGINT'); process.exit(); });
