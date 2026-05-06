@@ -789,18 +789,61 @@ async function sendQR(ctx, qr) {
         await safeReply(ctx, `❌ QR code kosong, coba lagi.`);
         return;
     }
-    await humanDelay(1800, 3600);
-    const sendAsText = Math.random() < 0.25;
+    // Coba kirim sebagai gambar dulu (lebih mudah di-scan)
     try {
-        if (!sendAsText) {
-            const qrBuffer = await QRCode.toBuffer(qr, { type: 'png', width: 1024, margin: 2, color: { dark: '#000000', light: '#FFFFFF' }, scale: 8 });
-            await ctx.replyWithPhoto({ source: qrBuffer }, {
-                caption: `📱 SCAN QR CODE DI WHATSAPP\n\n1. Buka WhatsApp di HP\n2. Tap ⋮ (titik tiga) → Perangkat Tertaut\n3. Tap Tautkan Perangkat\n4. Scan QR code di atas\n\n_Kalo gagal scan, screenshot aja terus scan dari galeri_`});
-        } else {
-            await safeReply(ctx, `📱 SCAN QR CODE MANUAL\n\n1. Buka WhatsApp → Perangkat Tertaut\n2. Tautkan Perangkat\n3. Scan kode dibawah (screenshot):\n\n\`\`\`\n${qr}\n\`\`\``);
-        }
-    } catch (err) {
-        await safeReply(ctx, `📱 SCAN QR CODE (Teks Backup)\n\n\`\`\`\n${qr}\n\`\`\``);
+        const qrBuffer = await QRCode.toBuffer(qr, {
+            type: 'png',
+            width: 512,   // lebih kecil = lebih cepat generate & upload
+            margin: 2,
+            color: { dark: '#000000', light: '#FFFFFF' },
+            scale: 4
+        });
+        await ctx.replyWithPhoto({ source: qrBuffer }, {
+            caption: `📱 *SCAN QR CODE DI WHATSAPP*
+
+1. Buka WhatsApp di HP
+2. Tap ⋮ → *Perangkat Tertaut*
+3. Tap *Tautkan Perangkat*
+4. Scan QR di atas
+
+⏱ QR berlaku *60 detik*
+_Gagal scan? Ketik /refreshqr_`,
+            parse_mode: 'Markdown'
+        });
+        return; // sukses, selesai
+    } catch (photoErr) {
+        log('WARN', 'QR', `Gagal kirim QR sebagai foto: ${photoErr.message}`);
+    }
+    // Fallback 1: kirim sebagai URL data (base64 image)
+    try {
+        const qrDataUrl = await QRCode.toDataURL(qr, { width: 300, margin: 2 });
+        // Konversi base64 ke buffer untuk dikirim
+        const base64Data = qrDataUrl.replace(/^data:image\/png;base64,/, '');
+        const buf = Buffer.from(base64Data, 'base64');
+        await ctx.replyWithPhoto({ source: buf }, {
+            caption: `📱 *SCAN QR CODE*
+
+⏱ QR berlaku 60 detik
+_Ketik /refreshqr jika expired_`,
+            parse_mode: 'Markdown'
+        });
+        return;
+    } catch (b64Err) {
+        log('WARN', 'QR', `Fallback base64 gagal: ${b64Err.message}`);
+    }
+    // Fallback 2: teks QR mentah
+    try {
+        await ctx.reply(`📱 *SCAN QR CODE MANUAL*
+
+Screenshot teks berikut lalu scan:
+
+${qr}
+
+_Ketik /refreshqr untuk QR baru_`, { parse_mode: 'Markdown' });
+    } catch (txtErr) {
+        await ctx.reply(`📱 QR CODE:
+
+${qr}`);
     }
 }
 
@@ -940,15 +983,28 @@ async function startLogin(ctx, userId) {
             if (qr) {
                 session.lastQR = qr;
                 if (!session.qrBlocked) {
-                    session.qrBlocked = true;
-                    try { await connectAnim.stop(null); } catch (err) {}
-                    await sendQR(ctx, qr);
-                    session.qrTimer = setTimeout(async () => {
-                        if (!session.loggedIn) {
-                            session.qrBlocked = false;
-                            await safeReply(ctx, `⏱ QR expired. Ketik /refreshqr untuk QR baru.`);
-                        }
-                    }, 60000);
+                    session.qrBlocked = true; // lock dulu cegah double-send
+                    try { await connectAnim.stop(null); } catch (_) {}
+                    try {
+                        await sendQR(ctx, qr);
+                        // QR berhasil dikirim — set timer expire 60 detik
+                        if (session.qrTimer) clearTimeout(session.qrTimer);
+                        session.qrTimer = setTimeout(async () => {
+                            if (!session.loggedIn) {
+                                session.qrBlocked = false; // buka lock agar QR baru bisa masuk
+                                await safeReply(ctx, `⏱ QR expired.
+
+Ketik /refreshqr untuk QR baru.`);
+                            }
+                        }, 60000);
+                    } catch (qrErr) {
+                        // Kirim QR gagal total — buka lock agar bisa dicoba lagi
+                        session.qrBlocked = false;
+                        log('ERROR', 'QR', `Gagal kirim QR: ${qrErr.message}`);
+                        await safeReply(ctx, `❌ Gagal mengirim QR code.
+
+Ketik /refreshqr untuk coba lagi.`);
+                    }
                 }
             }
             if (connection === 'close') {
