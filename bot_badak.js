@@ -41,7 +41,7 @@ const PAYMENT_BANK_HOLDER  = process.env.PAYMENT_BANK_HOLDER || 'Bot Owner';
 const PAYMENT_DANA         = process.env.PAYMENT_DANA        || '081234567890';
 const PAYMENT_CONTACT      = process.env.PAYMENT_CONTACT     || '@adminusername';
 const TRIAL_DURATION_HOURS = parseInt(process.env.TRIAL_DURATION_HOURS || '24');
-const KICK_LIMIT_PER_SESSION = parseInt(process.env.KICK_LIMIT || '20');
+// KICK_LIMIT dihapus — unlimited (semua anggota non-admin bisa dikick)
 const HEALTH_API_KEY = process.env.HEALTH_API_KEY || crypto.randomBytes(16).toString('hex');
 
 const PAYMENT_INFO =
@@ -440,77 +440,81 @@ async function humanDelay(minMs = 1200, maxMs = 3800) {
     return new Promise(resolve => setTimeout(resolve, delay));
 }
 
-async function humanDelayKick(index = 0) {
-    // Simulasi manusia kick satu per satu:
-    // buka profil anggota → scroll → tap nama → tap kick → konfirmasi
-    // Kadang cepat karena sudah hafal, kadang lambat karena salah tap atau distraksi
-    const r = Math.random();
-    let delaySec;
+// ========== NATURAL HUMAN DELAY ENGINE ==========
+// Simulasi perilaku manusia nyata: kadang cepat, kadang mikir lama,
+// kadang distracted, sesekali istirahat — tidak pernah fixed pattern.
 
-    if (r < 0.10) {
-        // Sangat cepat — langsung tap tanpa ragu (10%)
-        delaySec = 4 + Math.random() * 4; // 4–8 detik
-    } else if (r < 0.40) {
-        // Normal — scroll sebentar lalu kick (30%)
-        delaySec = 8 + Math.random() * 7; // 8–15 detik
-    } else if (r < 0.70) {
-        // Agak lambat — sempat salah tap atau mikir (30%)
-        delaySec = 16 + Math.random() * 10; // 16–26 detik
-    } else if (r < 0.88) {
-        // Lambat — distraksi sebentar, buka chat lain (18%)
-        delaySec = 27 + Math.random() * 15; // 27–42 detik
+function gaussianRandom(mean, std) {
+    // Box-Muller transform untuk distribusi normal (lebih natural dari uniform)
+    let u = 0, v = 0;
+    while (u === 0) u = Math.random();
+    while (v === 0) v = Math.random();
+    return mean + std * Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+}
+
+function clamp(val, min, max) {
+    return Math.max(min, Math.min(max, val));
+}
+
+// Pilih "mood" sesi saat ini — mempengaruhi semua delay berikutnya
+function getSessionMood() {
+    const r = Math.random();
+    if (r < 0.50) return 'normal';      // 50% — biasa aja
+    if (r < 0.75) return 'cepat';       // 25% — lagi gesit
+    if (r < 0.90) return 'pelan';       // 15% — santai/hati-hati
+    return 'distracted';                 // 10% — lagi gak fokus
+}
+
+// Jeda manusiawi untuk KICK — satu per satu
+async function humanDelayKick(mood) {
+    let base, std;
+    switch (mood) {
+        case 'cepat':      base = 18;  std = 4;   break;
+        case 'pelan':      base = 45;  std = 10;  break;
+        case 'distracted': base = 70;  std = 25;  break;
+        default:           base = 30;  std = 8;   break; // normal
+    }
+    // Kadang ada "mikir sebentar" ekstra — 15% kemungkinan
+    if (Math.random() < 0.15) base += 20 + Math.random() * 30;
+    const delaySec = clamp(gaussianRandom(base, std), 10, 120);
+    log('INFO', 'HumanDelay', `Jeda kick [${mood}]: ${Math.round(delaySec)} detik`);
+    return new Promise(r => setTimeout(r, Math.floor(delaySec * 1000)));
+}
+
+// Jeda manusiawi untuk ADD — satu per satu, lebih konservatif dari kick
+async function humanDelayAdd(mood) {
+    let base, std;
+    switch (mood) {
+        case 'cepat':      base = 35;  std = 8;   break;
+        case 'pelan':      base = 75;  std = 15;  break;
+        case 'distracted': base = 110; std = 30;  break;
+        default:           base = 55;  std = 12;  break; // normal
+    }
+    // Kadang "ngeliatin dulu" — 20% kemungkinan jeda ekstra
+    if (Math.random() < 0.20) base += 30 + Math.random() * 60;
+    const delaySec = clamp(gaussianRandom(base, std), 25, 240);
+    log('INFO', 'HumanDelay', `Jeda add [${mood}]: ${Math.round(delaySec)} detik`);
+    return new Promise(r => setTimeout(r, Math.floor(delaySec * 1000)));
+}
+
+// Jeda panjang — seperti orang pergi ngopi / buka app lain sebentar
+async function humanDelayLongBreak(label = 'break') {
+    // Distribusi bimodal: istirahat pendek (2-4 mnt) ATAU istirahat panjang (5-12 mnt)
+    let delaySec;
+    if (Math.random() < 0.6) {
+        delaySec = clamp(gaussianRandom(180, 40), 90, 260);   // pendek: 1.5-4 mnt
     } else {
-        // Sangat lambat — baca profil dulu atau keluar app sebentar (12%)
-        delaySec = 43 + Math.random() * 30; // 43–73 detik
+        delaySec = clamp(gaussianRandom(450, 90), 280, 720);  // panjang: 4-12 mnt
     }
-
-    // Setiap ~7 kick, tambah jeda ekstra (orang istirahat sejenak)
-    if (index > 0 && index % 7 === 0) {
-        const extraBreak = 15 + Math.random() * 25; // 15–40 detik extra
-        delaySec += extraBreak;
-        log('INFO', 'HumanDelay', `Jeda istirahat setelah ${index} kick: +${Math.round(extraBreak)} detik`);
-    }
-
-    log('INFO', 'HumanDelay', `Jeda antar kick #${index + 1}: ${Math.round(delaySec)} detik`);
+    log('INFO', 'HumanDelay', `Long break [${label}]: ${Math.round(delaySec / 60, 1)} menit`);
     return new Promise(r => setTimeout(r, Math.floor(delaySec * 1000)));
 }
 
-async function humanDelayAdd(index = 0) {
-    const r = Math.random();
-    let delaySec;
-    if (r < 0.08) {
-        delaySec = 10 + Math.random() * 8;
-    } else if (r < 0.35) {
-        delaySec = 20 + Math.random() * 15;
-    } else if (r < 0.65) {
-        delaySec = 36 + Math.random() * 20;
-    } else if (r < 0.85) {
-        delaySec = 57 + Math.random() * 30;
-    } else {
-        delaySec = 88 + Math.random() * 60;
-    }
-    if (index > 0 && index % 5 === 0) {
-        const extraBreak = 20 + Math.random() * 40;
-        delaySec += extraBreak;
-        log('INFO', 'HumanDelay', `Jeda istirahat setelah ${index} add: +${Math.round(extraBreak)} detik`);
-    }
-    log('INFO', 'HumanDelay', `Jeda antar add #${index + 1}: ${Math.round(delaySec)} detik`);
-    return new Promise(r => setTimeout(r, Math.floor(delaySec * 1000)));
-}
-
-async function humanDelayBatchPause() {
-    const r = Math.random();
-    let delaySec;
-    if (r < 0.4) delaySec = 20 + Math.random() * 20;
-    else if (r < 0.7) delaySec = 40 + Math.random() * 20;
-    else delaySec = 60 + Math.random() * 30;
-    log('INFO', 'HumanDelay', `Jeda antar batch: ${Math.round(delaySec)} detik`);
-    return new Promise(r => setTimeout(r, Math.floor(delaySec * 1000)));
-}
-
+// Jeda setelah error — orang biasanya kaget, tunggu lebih lama
 async function humanDelayError() {
-    const delaySec = 45 + Math.random() * 75;
-    log('INFO', 'HumanDelay', `Jeda setelah error: ${Math.round(delaySec)} detik`);
+    // Distribusi: 3-8 menit, dengan ekor panjang
+    const delaySec = clamp(gaussianRandom(300, 80), 180, 600);
+    log('INFO', 'HumanDelay', `Jeda error: ${Math.round(delaySec)} detik`);
     return new Promise(r => setTimeout(r, Math.floor(delaySec * 1000)));
 }
 
@@ -746,33 +750,63 @@ async function sendQR(ctx, qr) {
     }
 }
 
-// ========== STEALTH KICK (satu per satu, seperti manual) ==========
-async function burstThenPauseKick(sock, groupId, jids, onProgress) {
+// ========== NATURAL KICK ONE BY ONE ==========
+async function naturalKickOneByOne(sock, groupId, jids, onProgress) {
     let totalKicked = 0;
-    // Shuffle urutan supaya tidak terlihat berurutan
+
+    // Shuffle urutan kick — tidak predictable
     const shuffledJids = [...jids];
-    for (let iIdx = shuffledJids.length - 1; iIdx > 0; iIdx--) {
-        const j = Math.floor(Math.random() * (iIdx + 1));
-        [shuffledJids[iIdx], shuffledJids[j]] = [shuffledJids[j], shuffledJids[iIdx]];
+    for (let i = shuffledJids.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffledJids[i], shuffledJids[j]] = [shuffledJids[j], shuffledJids[i]];
     }
+
+    // Tentukan "mood" sesi — berubah tiap ~5-10 aksi (simulasi manusia ganti pace)
+    let mood = getSessionMood();
+    let actionsSinceMoodChange = 0;
+    let moodChangeTrigger = 5 + Math.floor(Math.random() * 6); // ganti mood tiap 5-10 aksi
 
     for (let i = 0; i < shuffledJids.length; i++) {
         const jid = shuffledJids[i];
+
+        // Ganti mood secara alami
+        actionsSinceMoodChange++;
+        if (actionsSinceMoodChange >= moodChangeTrigger) {
+            mood = getSessionMood();
+            actionsSinceMoodChange = 0;
+            moodChangeTrigger = 5 + Math.floor(Math.random() * 6);
+            log('INFO', 'Kick', `Mood berubah → ${mood}`);
+        }
+
         try {
             await simulateReadAndType(sock, groupId, false);
-            // Kick satu per satu seperti manual
             await sock.groupParticipantsUpdate(groupId, [jid], 'remove');
             totalKicked++;
             if (onProgress) onProgress(totalKicked);
-            log('INFO', 'Kick', `Berhasil kick ${jid} (total: ${totalKicked}/${shuffledJids.length})`);
-            // Jeda natural setelah kick, kecuali yang terakhir
-            if (i + 1 < shuffledJids.length) await humanDelayKick(i);
+            log('INFO', 'Kick', `✅ Kick ${jid} (${totalKicked}/${shuffledJids.length}) [${mood}]`);
+
+            if (i + 1 < shuffledJids.length) {
+                // 8% kemungkinan istirahat panjang — seperti orang tiba-tiba berhenti
+                if (Math.random() < 0.08) {
+                    log('INFO', 'Kick', `Ambil napas panjang setelah ${totalKicked} kick...`);
+                    await humanDelayLongBreak('kick-break');
+                    // Reset mood setelah break
+                    mood = getSessionMood();
+                    actionsSinceMoodChange = 0;
+                } else {
+                    await humanDelayKick(mood);
+                }
+            }
         } catch (err) {
-            log('ERROR', 'Kick', `Gagal kick ${jid}: ${err.message}`, err);
+            log('ERROR', 'Kick', `Gagal kick ${jid}: ${err.message}`);
+            if (err.message && (err.message.includes('Connection Closed') || err.message.includes('Connection Lost'))) {
+                // Koneksi putus — hentikan
+                return { kicked: totalKicked, stopped: true, reason: 'connection' };
+            }
             await humanDelayError();
         }
     }
-    return totalKicked;
+    return { kicked: totalKicked, stopped: false };
 }
 
 // ========== DESTROY SESSION ==========
@@ -1032,13 +1066,13 @@ async function showKickMenu(ctx, userId, session) {
             await fetchAnim.stop(null);
             return safeReply(ctx, `ℹ️ Tidak ada anggota yang bisa dikick.\n\nSemua anggota adalah admin.`);
         }
-        const members = allMembers.slice(0, KICK_LIMIT_PER_SESSION);
-        const limited = allMembers.length > KICK_LIMIT_PER_SESSION;
+        const members = allMembers; // unlimited
+        const limited = false;
         session.members = members;
         kickSelections.set(userId, new Set());
         await fetchAnim.stop(null);
         let infoText = '';
-        if (limited) infoText = `\n⚠️ _Ditampilkan ${KICK_LIMIT_PER_SESSION} dari ${allMembers.length} anggota (batas per sesi)_`;
+        // unlimited — semua anggota ditampilkan
         await safeReply(ctx, `╔${DIVIDER}╗\n║  MENU KICK ANGGOTA\n╚${DIVIDER}╝\n\n🎯 Grup: ${esc(session.groupName || '')}\n👥 Non-admin: ${members.length} orang${infoText}\n\nKetuk nama untuk pilih/batal.\nTekan Kick Terpilih jika sudah siap.\n\n⚠️ _Aksi kick tidak bisa dibatalkan!_`, { ...buildMemberKeyboard(members, kickSelections.get(userId)) });
     } catch (err) {
         await fetchAnim.stop(`❌ Error: ${esc(err.message)}`);
@@ -1105,70 +1139,89 @@ async function addContactsToGroup(ctx, userId, contacts, groupId, groupName) {
     if (!session || !session.loggedIn) {
         return safeReply(ctx, '❌ Session WA berakhir. Tekan 🔑 Login WhatsApp.');
     }
+
     const total = contacts.length;
-    let berhasil = 0, gagal = 0, notWA = 0, skipped = 0;
-    const statusMsg = await safeReply(ctx, `⏳ Menambahkan ${total} kontak ke grup...\n\n_Proses berjalan pelan untuk menghindari ban WA._`);
-    
+    let berhasil = 0, gagal = 0, notWA = 0;
+    const statusMsg = await safeReply(ctx, `⏳ Menambahkan ${total} kontak ke grup...\n\n⚠️ Proses berjalan lambat dan natural untuk keamanan WA.`);
+
+    // Mood engine — berubah tiap beberapa aksi seperti manusia ganti pace
+    let mood = getSessionMood();
+    let actionsSinceMoodChange = 0;
+    let moodChangeTrigger = 4 + Math.floor(Math.random() * 5); // ganti tiap 4-8 aksi
+
     for (let i = 0; i < contacts.length; i++) {
-        // Cek ulang session setiap iterasi
+        // Cek session masih aktif
         const currentSession = userSessions.get(userId);
         if (!currentSession || !currentSession.loggedIn) {
-            log('WARN', 'Add', 'Session hilang saat proses add, berhenti.');
-            await safeReply(ctx, `⚠️ Proses add terhenti — session WA terputus.\n✅ Berhasil: ${berhasil} | ❌ Error: ${gagal} | 📵 No WA: ${notWA}\n\nLogin ulang lalu lanjut manual.`);
+            await safeReply(ctx, `⚠️ Session WA terputus di tengah proses.\n\n✅ Berhasil: ${berhasil}\n📵 No WA: ${notWA}\n❌ Error/Belum: ${total - berhasil - notWA}\n\nLogin ulang dan coba lagi.`);
             vcfPending.delete(userId);
             return;
         }
 
+        // Ganti mood secara alami
+        actionsSinceMoodChange++;
+        if (actionsSinceMoodChange >= moodChangeTrigger) {
+            mood = getSessionMood();
+            actionsSinceMoodChange = 0;
+            moodChangeTrigger = 4 + Math.floor(Math.random() * 5);
+            log('INFO', 'Add', `Mood berubah → ${mood}`);
+        }
+
         const c = contacts[i];
         try {
-            // Timeout untuk onWhatsApp check (15 detik)
-            const checkPromise = currentSession.sock.onWhatsApp(c.phone);
-            const timeoutPromise = new Promise((_, rej) => setTimeout(() => rej(new Error('Check timeout')), 15000));
-            const [result] = await Promise.race([checkPromise, timeoutPromise]);
-            
+            const [result] = await currentSession.sock.onWhatsApp(c.phone);
             if (!result || !result.exists) {
                 notWA++;
                 log('INFO', 'Add', `${c.phone} => No WA`);
+                // Skip juga perlu jeda kecil — manusia tetap scroll/lihat
+                if (i + 1 < contacts.length) await humanDelayNatural(3, 8);
                 continue;
             }
+
             await simulateReadAndType(currentSession.sock, groupId, true);
             await currentSession.sock.groupParticipantsUpdate(groupId, [result.jid], 'add');
             berhasil++;
-            log('INFO', 'Add', `✅ ${c.name} (${c.phone}) berhasil ditambahkan`);
-            if (i + 1 < contacts.length) await humanDelayAdd(berhasil);
-            
-            // Update progress setiap kontak
-            if ((i + 1) % 3 === 0 || i + 1 === total) {
-                try {
-                    await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, null, 
-                        `⏳ Progres: ${i + 1}/${total}\n✅ Berhasil: ${berhasil} | 📵 No WA: ${notWA} | ❌ Error: ${gagal}`);
-                } catch (err) {}
+            log('INFO', 'Add', `✅ ${c.name} (${c.phone}) berhasil ditambahkan [${mood}]`);
+
+            // Update progress
+            try {
+                await ctx.telegram.editMessageText(
+                    ctx.chat.id, statusMsg.message_id, null,
+                    `⏳ Progres: ${i + 1}/${total}\n✅ Berhasil: ${berhasil} | 📵 No WA: ${notWA} | ❌ Error: ${gagal}\n\n_Mood: ${mood}_`
+                );
+            } catch (_) {}
+
+            if (i + 1 < contacts.length) {
+                // 10% kemungkinan istirahat panjang — seperti orang berhenti sebentar
+                if (Math.random() < 0.10) {
+                    try {
+                        await ctx.telegram.editMessageText(
+                            ctx.chat.id, statusMsg.message_id, null,
+                            `⏸️ Jeda sejenak... (${berhasil} dari ${total} selesai)\n✅ Berhasil: ${berhasil} | 📵 No WA: ${notWA}\n\n_Ini normal, menghindari deteksi WA._`
+                        );
+                    } catch (_) {}
+                    await humanDelayLongBreak('add-break');
+                    // Reset mood setelah break
+                    mood = getSessionMood();
+                    actionsSinceMoodChange = 0;
+                } else {
+                    await humanDelayAdd(mood);
+                }
             }
-            
-            // Jeda batch tiap 5 kontak berhasil (anti-ban)
-            if (berhasil > 0 && berhasil % 5 === 0 && i + 1 < contacts.length) {
-                log('INFO', 'Add', `Pause batch setelah ${berhasil} add berhasil...`);
-                try {
-                    await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, null,
-                        `⏸️ Jeda batch (${berhasil} berhasil)...\n\n_Menunggu sejenak untuk keamanan akun WA..._`);
-                } catch (err) {}
-                await humanDelayBatchPause();
-            }
+
         } catch (err) {
-            // Connection Closed: session mati, hentikan proses
-            if (err.message && (err.message.includes('Connection Closed') || err.message.includes('Connection closed'))) {
-                log('ERROR', 'Add', `Connection Closed saat add ${c.phone}, menghentikan proses.`);
-                userSessions.delete(userId);
-                await safeReply(ctx, `🔌 Koneksi WA terputus saat proses add.\n\n✅ Berhasil: ${berhasil} | ❌ Error: ${gagal} | 📵 No WA: ${notWA}\n\nSession telah direset. Tekan 🔑 Login WhatsApp untuk melanjutkan.`);
+            gagal++;
+            log('ERROR', 'Add', `${c.phone}: ${err.message}`, err);
+            if (err.message && (err.message.includes('Connection Closed') || err.message.includes('Connection Lost'))) {
+                await safeReply(ctx, `🔴 Koneksi WA terputus saat proses.\n\n✅ Berhasil: ${berhasil}\n📵 No WA: ${notWA}\n❌ Gagal/Belum: ${total - berhasil - notWA}\n\nTekan 🔑 Login WhatsApp untuk login ulang.`);
                 vcfPending.delete(userId);
                 return;
             }
-            gagal++;
-            log('ERROR', 'Add', `${c.phone}: ${err.message}`, err);
             await humanDelayError();
         }
     }
-    let hasil = `╔${DIVIDER}╗\n║  HASIL IMPORT VCF\n╚${DIVIDER}╝\n\n🎯 Grup: ${groupName}\n\n${DIVIDER_THIN}\n✅ Berhasil ditambah: ${berhasil} kontak\n📵 Tidak punya WA: ${notWA} kontak\n❌ Error: ${gagal} kontak\n`;
+
+    const hasil = `╔${DIVIDER}╗\n║  HASIL IMPORT VCF\n╚${DIVIDER}╝\n\n🎯 Grup: ${esc(groupName)}\n\n${DIVIDER_THIN}\n✅ Berhasil ditambah: ${berhasil} kontak\n📵 Tidak punya WA: ${notWA} kontak\n❌ Error: ${gagal} kontak\n`;
     await safeReply(ctx, hasil);
     vcfPending.delete(userId);
 }
@@ -1890,9 +1943,14 @@ tgBot.action('do_kick', async (ctx) => {
     if (!selected || selected.size === 0) return safeReply(ctx, '⚠️ Belum ada yang dipilih!');
     const jidList = Array.from(selected);
     const kickAnim = await liveKickProgress(ctx, jidList.length);
-    const totalKicked = await burstThenPauseKick(session.sock, session.groupId, jidList, (progress) => { kickAnim.update(progress); });
+    const kickResult = await naturalKickOneByOne(session.sock, session.groupId, jidList, (progress) => { kickAnim.update(progress); });
     kickSelections.set(userId, new Set());
-    await kickAnim.stop(`✅ Kick Selesai\\!\n\n🦵 ${totalKicked} dari ${jidList.length} anggota berhasil dikick\\.\n🎯 Grup: ${esc(session.groupName || 'N/A')}`);
+    const totalKicked = kickResult.kicked;
+    if (kickResult.stopped && kickResult.reason === 'connection') {
+        await kickAnim.stop(`🔴 Koneksi WA terputus!\n\n🦵 ${totalKicked} dari ${jidList.length} berhasil dikick.\nTekan 🔑 Login untuk reconnect.`);
+    } else {
+        await kickAnim.stop(`✅ Kick Selesai\!\n\n🦵 ${totalKicked} dari ${jidList.length} anggota berhasil dikick\.\n🎯 Grup: ${esc(session.groupName || 'N/A')}`);
+    }
 });
 
 tgBot.action('cancel_kick', async (ctx) => {
@@ -1952,52 +2010,25 @@ http.createServer((req, res) => {
 });
 
 // ========== LAUNCH ==========
-async function launchBot(retryCount = 0) {
-    const MAX_LAUNCH_RETRIES = 5;
-    try {
-        await tgBot.launch();
-        console.log('\n╔══════════════════════════════════════════════════════════════╗');
-        console.log('║          W A - K I C K E R   B O T   v 5 . 1 . 0            ║');
-        console.log('║        G O D M O D E   E D I T I O N   (FULL FIXED)         ║');
-        console.log('╠══════════════════════════════════════════════════════════════╣');
-        console.log(`║  Admin IDs      : ${ADMIN_IDS.join(', ')}`);
-        console.log(`║  Trial          : ${TRIAL_DURATION_HOURS} jam`);
-        console.log(`║  Kick Limit     : ${KICK_LIMIT_PER_SESSION} per sesi`);
-        console.log(`║  Database       : JSON (${DATA_DIR})`);
-        console.log(`║  Session Cleanup: Auto (${SESSION_IDLE_MS / 3600000} jam idle)`);
-        console.log(`║  Health Auth    : Enabled (API Key required)`);
-        console.log('╚══════════════════════════════════════════════════════════════╝\n');
-    } catch (err) {
-        log('ERROR', 'Launch', `Bot gagal start (percobaan ${retryCount + 1}/${MAX_LAUNCH_RETRIES}): ${err.message}`, err);
-        if (retryCount < MAX_LAUNCH_RETRIES - 1) {
-            const delayMs = Math.min(5000 * Math.pow(2, retryCount), 60000);
-            console.error(`🔄 Retry launch dalam ${Math.round(delayMs/1000)} detik...`);
-            await new Promise(r => setTimeout(r, delayMs));
-            return launchBot(retryCount + 1);
-        } else {
-            console.error('❌ Bot gagal start setelah semua percobaan. Keluar...');
-            process.exit(1);
-        }
-    }
-}
+tgBot.launch().then(() => {
+    console.log('\n╔══════════════════════════════════════════════════════════════╗');
+    console.log('║          W A - K I C K E R   B O T   v 5 . 1 . 0            ║');
+    console.log('║        G O D M O D E   E D I T I O N   (FULL FIXED)         ║');
+    console.log('╠══════════════════════════════════════════════════════════════╣');
+    console.log(`║  Admin IDs      : ${ADMIN_IDS.join(', ')}`);
+    console.log(`║  Trial          : ${TRIAL_DURATION_HOURS} jam`);
+    console.log(`║  Kick Limit     : Unlimited`);
+    console.log(`║  Database       : JSON (${DATA_DIR})`);
+    console.log(`║  Session Cleanup: Auto (${SESSION_IDLE_MS / 3600000} jam idle)`);
+    console.log(`║  Health Auth    : Enabled (API Key required)`);
+    console.log('╚══════════════════════════════════════════════════════════════╝\n');
+}).catch(err => {
+    console.error('❌ Gagal launch bot:', err.message);
+    log('ERROR', 'Launch', 'Bot gagal start', err);
+    process.exit(1);
+});
 
-launchBot();
-
-async function gracefulShutdown(signal) {
-    console.log(`\n⛔ Menerima ${signal}, menutup bot dengan bersih...`);
-    tgBot.stop(signal);
-    // Tutup semua session WA
-    for (const [userId, session] of userSessions.entries()) {
-        try {
-            if (session.sock) session.sock.end(new Error('shutdown'));
-        } catch (e) {}
-    }
-    userSessions.clear();
-    console.log('✅ Bot ditutup dengan bersih.');
-    process.exit(0);
-}
-
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => { tgBot.stop('SIGINT'); process.exit(); });
+process.on('SIGTERM', () => { tgBot.stop('SIGTERM'); process.exit(); });
 process.on('uncaughtException', (err) => { log('ERROR', 'System', 'Uncaught Exception', err); });
 process.on('unhandledRejection', (reason) => { log('ERROR', 'System', 'Unhandled Rejection', reason); });
