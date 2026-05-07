@@ -584,7 +584,7 @@ async function requireAccess(ctx, next) {
 // --- 1. TXT to VCF (Multiple) ---
 async function handleCvTxtToVcfStart(ctx, userId) {
     setState(userId, { mode: 'cv_txt_to_vcf', files: [], fileNames: [], collecting: true });
-    await safeReply(ctx, `📥 *Mengumpulkan file TXT...*\n\nKirim file lain atau ketik /done`);
+    await safeReply(ctx, `📥 *Mengumpulkan file TXT...*\n\nSetelah selesai mengirimkan File silahkan tekan /done untuk melanjutkan`);
 }
 
 async function handleCvTxtToVcfFile(ctx, userId, state, doc) {
@@ -638,7 +638,7 @@ async function finalizeCvTxtToVcf(ctx, userId, state) {
 // --- 2. VCF to TXT (Multiple) ---
 async function handleCvVcfToTxtStart(ctx, userId) {
     setState(userId, { mode: 'cv_vcf_to_txt', files: [], fileNames: [], collecting: true });
-    await safeReply(ctx, `📥 *Mengumpulkan file VCF...*\n\nKirim file lain atau ketik /done`);
+    await safeReply(ctx, `📥 *Mengumpulkan file VCF...*\n\nSetelah selesai mengirimkan File silahkan tekan /done untuk melanjutkan`);
 }
 
 async function handleCvVcfToTxtFile(ctx, userId, state, doc) {
@@ -788,7 +788,7 @@ async function handleTxt2VcfFile(ctx, userId, state, doc) {
 // --- 5. Gabung TXT ---
 async function handleGabungTxtStart(ctx, userId) {
     setState(userId, { mode: 'gabungtxt', files: [], fileNames: [], collecting: true });
-    await safeReply(ctx, `📥 *Mengumpulkan file TXT...*\n\nKirim file lain atau ketik /done`);
+    await safeReply(ctx, `📥 *Mengumpulkan file TXT...*\n\nSetelah selesai mengirimkan File silahkan tekan /done untuk melanjutkan`);
 }
 
 async function handleGabungTxtFile(ctx, userId, state, doc) {
@@ -855,7 +855,7 @@ async function finalizeGabungTxt(ctx, userId, state) {
 // --- 6. Gabung VCF ---
 async function handleGabungVcfStart(ctx, userId) {
     setState(userId, { mode: 'gabungvcf', files: [], fileNames: [], collecting: true });
-    await safeReply(ctx, `📥 *Mengumpulkan file VCF...*\n\nKirim file lain atau ketik /done`);
+    await safeReply(ctx, `📥 *Mengumpulkan file VCF...*\n\nSetelah selesai mengirimkan File silahkan tekan /done untuk melanjutkan`);
 }
 
 async function handleGabungVcfFile(ctx, userId, state, doc) {
@@ -1868,6 +1868,203 @@ tgBot.action('vcf_cancel', async (ctx) => {
     vcfPending.delete(ctx.from.id);
     await ctx.answerCbQuery('Dibatalkan');
     await safeReply(ctx, '✖ Import dibatalkan.');
+});
+
+// ========== MENU HANDLERS YANG HILANG ==========
+
+// 🔑 Login WhatsApp
+tgBot.hears('🔑 Login WhatsApp', async (ctx) => {
+    const userId = ctx.from.id;
+    const session = userSessions.get(userId);
+    
+    if (session && session.loggedIn) {
+        return safeReply(ctx, '✅ Anda sudah login WhatsApp.\n\nKetik /logout jika ingin keluar.');
+    }
+    
+    if (loginLocks.has(userId)) {
+        return safeReply(ctx, '⏳ Proses login sedang berjalan. Scan QR Code yang sudah dikirim.');
+    }
+    
+    loginLocks.set(userId, Date.now());
+    
+    await safeReply(ctx, `🔐 *LOGIN WHATSAPP*\n\nBot akan mengirimkan QR Code.\n\n📱 Cara login:\n1. Buka WhatsApp\n2. Klik Menu (3 titik) → Perangkat Tertaut → Tautkan Perangkat\n3. Scan QR Code yang muncul\n\n⏳ QR Code akan dikirim dalam beberapa saat...`);
+    
+    try {
+        const { version, isLatest } = await fetchLatestBaileysVersion();
+        const { state, saveCreds } = await useMultiFileAuthState(path.join(AUTH_BASE_FOLDER, `user_${userId}`));
+        
+        const sock = makeWASocket({
+            version,
+            auth: state,
+            printQRInTerminal: false,
+            logger: pino({ level: 'silent' }),
+            browser: ['WA Kicker Bot', 'Chrome', '1.0.0']
+        });
+        
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
+            
+            if (qr) {
+                try {
+                    const qrImage = await QRCode.toBuffer(qr, { type: 'png', width: 300, margin: 2 });
+                    await ctx.replyWithPhoto({ source: qrImage }, { caption: `📱 *SCAN QR CODE INI*\n\n${'─'.repeat(30)}\n1. Buka WhatsApp\n2. Perangkat Tertaut\n3. Tautkan Perangkat\n4. Scan QR Code\n${'─'.repeat(30)}\n⏳ QR Code berlaku 2 menit` });
+                } catch (err) {
+                    await safeReply(ctx, `❌ Gagal generate QR Code: ${err.message}`);
+                }
+                return;
+            }
+            
+            if (connection === 'open') {
+                userSessions.set(userId, { sock, loggedIn: true });
+                loginLocks.delete(userId);
+                const kb = await getKeyboard(userId);
+                await safeReply(ctx, `✅ *BERHASIL LOGIN!*\n\nWhatsApp Anda sekarang terhubung.\n\nGunakan /listgc untuk melihat daftar grup.`, { ...kb });
+            }
+            
+            if (connection === 'close') {
+                loginLocks.delete(userId);
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                if (statusCode !== DisconnectReason.loggedOut) {
+                    userSessions.delete(userId);
+                    await safeReply(ctx, `⚠️ Koneksi WhatsApp terputus. Silakan /login ulang.`);
+                }
+            }
+        });
+        
+        sock.ev.on('creds.update', saveCreds);
+        
+    } catch (err) {
+        loginLocks.delete(userId);
+        log('ERROR', 'Login', err.message, err);
+        await safeReply(ctx, `❌ Gagal login: ${err.message}`);
+    }
+});
+
+// 📊 Status
+tgBot.hears('📊 Status', async (ctx) => {
+    const userId = ctx.from.id;
+    const status = await getUserStatus(userId);
+    const session = userSessions.get(userId);
+    const waStatus = session && session.loggedIn ? '✅ Terhubung' : '❌ Belum Login';
+    
+    let statusText = `📊 *STATUS BOT*\n${'─'.repeat(30)}\n`;
+    statusText += `👤 Status Akun: `;
+    
+    if (isAdmin(userId)) {
+        statusText += `👑 ADMIN\n`;
+    } else if (status === 'regular') {
+        const user = db.getUser(userId);
+        statusText += `⭐ PREMIUM\n📅 Expires: ${formatDate(user.expiresAt)}\n⏳ Sisa: ${formatCountdown(user.expiresAt)}\n`;
+    } else if (status === 'trial') {
+        const user = db.getUser(userId);
+        statusText += `🎁 TRIAL\n📅 Expires: ${formatDate(user.trialExpiresAt)}\n⏳ Sisa: ${formatCountdown(user.trialExpiresAt)}\n`;
+    } else if (status === 'expired') {
+        statusText += `⚠️ EXPIRED\n💳 Silakan /beli untuk perpanjang\n`;
+    } else if (status === 'trial_expired') {
+        statusText += `⚠️ TRIAL HABIS\n💳 Upgrade ke /beli\n`;
+    } else {
+        statusText += `❓ BELUM REGISTER\n🎁 Ketik /start atau coba trial\n`;
+    }
+    
+    statusText += `${'─'.repeat(30)}\n📱 WhatsApp: ${waStatus}\n🤖 Bot: ✅ Aktif\n📅 Server: ${formatDate(new Date().toISOString())}`;
+    
+    await safeReply(ctx, statusText);
+});
+
+// 👤 Akun Saya
+tgBot.hears('👤 Akun Saya', async (ctx) => {
+    const userId = ctx.from.id;
+    const user = db.getUser(userId);
+    
+    if (!user) {
+        return safeReply(ctx, `👤 *AKUN ANDA*\n${'─'.repeat(30)}\n❌ Belum memiliki akun.\n\n🎁 Ketik /start atau pilih 🎁 Coba Gratis (Trial)`);
+    }
+    
+    let profileText = `👤 *AKUN ANDA*\n${'─'.repeat(30)}\n`;
+    profileText += `🆔 ID: ${userId}\n`;
+    profileText += `📧 Username: @${ctx.from.username || '-'}\n`;
+    profileText += `📋 Role: `;
+    
+    if (isAdmin(userId)) profileText += `👑 ADMIN\n`;
+    else if (user.role === 'regular') profileText += `⭐ PREMIUM\n📅 Expires: ${formatDate(user.expiresAt)}\n`;
+    else if (user.role === 'trial') profileText += `🎁 TRIAL\n📅 Expires: ${formatDate(user.trialExpiresAt)}\n`;
+    else profileText += `❓ NONE\n`;
+    
+    profileText += `${'─'.repeat(30)}\n💳 Ketik /beli untuk lihat paket`;
+    
+    await safeReply(ctx, profileText);
+});
+
+// ⭐ Premium
+tgBot.hears('⭐ Premium', async (ctx) => {
+    const paymentText = `⭐ *PREMIUM PACKAGE*\n${'─'.repeat(30)}\n\n💎 *Paket Reguler*\n📅 Masa Aktif: 30 hari\n💰 Harga: ${formatRupiah(50000)}\n\n💎 *Paket Pro*\n📅 Masa Aktif: 90 hari\n💰 Harga: ${formatRupiah(120000)}\n\n💎 *Paket Lifetime*\n📅 Masa Aktif: Selamanya\n💰 Harga: ${formatRupiah(300000)}\n\n${'─'.repeat(30)}\n\n💳 *Pembayaran:*\n🏦 Bank: ${PAYMENT_BANK_NAME}\n📞 No Rek: ${PAYMENT_BANK_NUMBER}\n👤 A.n: ${PAYMENT_BANK_HOLDER}\n\n📱 Dana: ${PAYMENT_DANA}\n\n📩 Konfirmasi: ${PAYMENT_CONTACT}\n\n${'─'.repeat(30)}\nKetik /beli [paket] untuk order\nContoh: /beli 30hari`;
+    
+    await safeReply(ctx, paymentText);
+});
+
+// 📋 Pending Payment (ADMIN ONLY)
+tgBot.hears('📋 Pending Payment', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) {
+        return safeReply(ctx, '⛔ Akses ditolak. Hanya admin.');
+    }
+    
+    const payments = db.getAllPendingPayments();
+    if (payments.length === 0) {
+        return safeReply(ctx, '📋 Tidak ada payment pending.');
+    }
+    
+    let text = `📋 *PENDING PAYMENTS*\n${'─'.repeat(30)}\n`;
+    payments.forEach((p, i) => {
+        text += `${i + 1}. User: ${p.userId}\n   Paket: ${p.package}\n   Jumlah: ${formatRupiah(p.amount)}\n   Tgl: ${formatDate(p.date)}\n\n`;
+    });
+    text += `${'─'.repeat(30)}\nGunakan /confirm [userId] untuk konfirmasi`;
+    
+    await safeReply(ctx, text);
+});
+
+// 👥 User List (ADMIN ONLY)
+tgBot.hears('👥 User List', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) {
+        return safeReply(ctx, '⛔ Akses ditolak. Hanya admin.');
+    }
+    
+    const users = db.getAllUsers();
+    if (users.length === 0) {
+        return safeReply(ctx, '👥 Belum ada user terdaftar.');
+    }
+    
+    let text = `👥 *USER LIST*\n${'─'.repeat(30)}\n`;
+    users.forEach((u, i) => {
+        const role = u.role === 'regular' ? '⭐' : u.role === 'trial' ? '🎁' : '❓';
+        const expiry = u.role === 'regular' ? formatDate(u.expiresAt) : u.role === 'trial' ? formatDate(u.trialExpiresAt) : '-';
+        text += `${i + 1}. ${role} ${u.id}\n   Exp: ${expiry}\n\n`;
+    });
+    text += `${'─'.repeat(30)}\nTotal: ${users.length} user`;
+    
+    if (text.length > 4000) {
+        const buffer = Buffer.from(text, 'utf-8');
+        await sendFile(ctx, buffer, 'user_list.txt', '📋 Daftar user');
+    } else {
+        await safeReply(ctx, text);
+    }
+});
+
+// 🚪 Logout WhatsApp
+tgBot.hears('🚪 Logout WhatsApp', async (ctx) => {
+    const userId = ctx.from.id;
+    const session = userSessions.get(userId);
+    
+    if (!session || !session.loggedIn) {
+        return safeReply(ctx, '❌ Anda belum login WhatsApp.');
+    }
+    
+    try {
+        await session.sock.logout();
+    } catch (err) {}
+    
+    userSessions.delete(userId);
+    const kb = await getKeyboard(userId);
+    await safeReply(ctx, `✅ *LOGOUT BERHASIL*\n\nWhatsApp telah diputus.\n\nKetik /login untuk login kembali.`, { ...kb });
 });
 
 // ========== HELP ==========
