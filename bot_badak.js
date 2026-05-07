@@ -13,7 +13,7 @@ const path = require('path');
 const crypto = require('crypto');
 const http = require('http');
 // ╔══════════════════════════════════════════════════════════════╗
-// ║         W A - K I C K E R   B O T   v 5 . 1 . 0            ║
+// ║         W A - K I C K E R   B O T   v 1 . 0 . 0            ║
 // ║      G O D M O D E   E D I T I O N   (FULL FIXED)          ║
 // ╚══════════════════════════════════════════════════════════════╝
 
@@ -36,10 +36,10 @@ if (ADMIN_IDS.length === 0) {
 
 const BOT_NAME             = process.env.BOT_NAME || '⚡ WA Kicker Bot';
 const PAYMENT_BANK_NAME    = process.env.PAYMENT_BANK_NAME   || 'SEA';
-const PAYMENT_BANK_NUMBER  = process.env.PAYMENT_BANK_NUMBER || '1234567890';
+const PAYMENT_BANK_NUMBER  = process.env.PAYMENT_BANK_NUMBER || '901542678431';
 const PAYMENT_BANK_HOLDER  = process.env.PAYMENT_BANK_HOLDER || 'Bot Owner';
-const PAYMENT_DANA         = process.env.PAYMENT_DANA        || '081234567890';
-const PAYMENT_CONTACT      = process.env.PAYMENT_CONTACT     || '@adminusername';
+const PAYMENT_DANA         = process.env.PAYMENT_DANA        || '083195510279';
+const PAYMENT_CONTACT      = process.env.PAYMENT_CONTACT     || '@Bryan3797';
 const TRIAL_DURATION_HOURS = parseInt(process.env.TRIAL_DURATION_HOURS || '24');
 // KICK_LIMIT dihapus — unlimited (semua anggota non-admin bisa dikick)
 const HEALTH_API_KEY = process.env.HEALTH_API_KEY || crypto.randomBytes(16).toString('hex');
@@ -747,16 +747,52 @@ function buildProgressBar(done, total, width = 14) {
 
 async function liveKickProgress(ctx, total) {
     let current = 0;
-    const anim = await liveMessage(ctx,
-        `🦵 *Memulai kick...*\n${buildProgressBar(0, total)}\n0/${total} orang`,
-        (i) => {
-            const spin = SPINNER_FRAMES[i % SPINNER_FRAMES.length];
-            const pulse = PULSE_FRAMES[i % PULSE_FRAMES.length];
-            return `${pulse} *Sedang mengkick anggota...*\n\n${buildProgressBar(current, total)}\n${spin} \`${current}/${total}\` orang dikick\n\n_Sabar, jeda antar kick untuk stealth mode..._`;
-        }, 800);
+    let progressMsg = null;
+
+    const buildText = (n) => {
+        const pct = total === 0 ? 100 : Math.round((n / total) * 100);
+        const filled = Math.round((n / total) * 14);
+        const empty = 14 - filled;
+        const bar = '[' + '█'.repeat(filled) + '░'.repeat(empty) + '] ' + pct + '%';
+        return `🦵 *Sedang mengkick anggota...*\n\n${bar}\n✅ \`${n}/${total}\` orang dikick\n\n_Sabar, jeda antar kick untuk stealth mode..._`;
+    };
+
+    try {
+        progressMsg = await ctx.reply(buildText(0), { parse_mode: 'Markdown' });
+    } catch (err) {
+        progressMsg = null;
+    }
+
+    let lastUpdate = 0;
     return {
-        update: (n) => { current = n; },
-        stop: (finalText) => anim.stop(finalText)
+        update: async (n) => {
+            current = n;
+            const now = Date.now();
+            // Update paling cepat tiap 4 detik untuk hindari Telegram rate limit
+            if (now - lastUpdate < 4000) return;
+            lastUpdate = now;
+            if (!progressMsg) return;
+            try {
+                await ctx.telegram.editMessageText(
+                    progressMsg.chat.id, progressMsg.message_id, undefined,
+                    buildText(n), { parse_mode: 'Markdown' }
+                );
+            } catch (_) {}
+        },
+        stop: async (finalText) => {
+            if (!finalText) return;
+            if (progressMsg) {
+                try {
+                    await ctx.telegram.editMessageText(
+                        progressMsg.chat.id, progressMsg.message_id, undefined,
+                        finalText, { parse_mode: 'Markdown' }
+                    );
+                    return;
+                } catch (_) {}
+            }
+            // Fallback kirim pesan baru jika edit gagal
+            try { await safeReply(ctx, finalText); } catch (_) {}
+        }
     };
 }
 
@@ -888,7 +924,7 @@ async function naturalKickOneByOne(sock, groupId, jids, onProgress) {
             await simulateReadAndType(sock, groupId, false);
             await sock.groupParticipantsUpdate(groupId, [jid], 'remove');
             totalKicked++;
-            if (onProgress) onProgress(totalKicked);
+            if (onProgress) await onProgress(totalKicked);
             log('INFO', 'Kick', `✅ Kick ${jid} (${totalKicked}/${shuffledJids.length}) [${mood}]`);
 
             if (i + 1 < shuffledJids.length) {
@@ -1174,6 +1210,7 @@ async function showGroupPicker(ctx, userId, session) {
         await fetchAnim.stop(null);
         let header = `╔${DIVIDER}╗\n║  PILIH GRUP\n╚${DIVIDER}╝\n\n`;
         if (isTrial) header += `⚠️ _Trial: hanya 1 grup_\n\n`;
+        header += `💡 _Tips: Untuk grup besar, kick bertahap 50 anggota per sesi dan tunggu beberapa jam sebelum lanjut — untuk keamanan akun WA._\n\n`;
         header += `Ketuk nama grup yang ingin dipilih:`;
         await safeReply(ctx, header, { reply_markup: { inline_keyboard: buttons } });
     } catch (err) {
@@ -1764,8 +1801,10 @@ tgBot.action(/^toggle_(.+)$/, async (ctx) => {
         await ctx.answerCbQuery('❌ Dihapus');
     } else {
         selected.add(jid);
-        await ctx.answerCbQuery('✅ Ditambahkan');
+        await ctx.answerCbQuery('✅ Dipilih');
     }
+    // Delay kecil sebelum update keyboard agar tidak flood Telegram API
+    await new Promise(r => setTimeout(r, 300));
     try { await ctx.editMessageReplyMarkup(buildMemberKeyboard(session.members, selected).reply_markup); } catch (err) {}
 });
 
@@ -1904,7 +1943,7 @@ async function runStartupAuthCheck() {
 tgBot.launch().then(async () => {
     await runStartupAuthCheck();
     console.log('\n╔══════════════════════════════════════════════════════════════╗');
-    console.log('║          W A - K I C K E R   B O T   v 5 . 1 . 0            ║');
+    console.log('║          W A - K I C K E R   B O T   v 1 . 0 . 0            ║');
     console.log('║        G O D M O D E   E D I T I O N   (FULL FIXED)         ║');
     console.log('╠══════════════════════════════════════════════════════════════╣');
     console.log(`║  Admin IDs      : ${ADMIN_IDS.join(', ')}`);
