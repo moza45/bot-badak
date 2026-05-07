@@ -36,10 +36,10 @@ if (ADMIN_IDS.length === 0) {
 
 const BOT_NAME             = process.env.BOT_NAME || '⚡ WA Kicker Bot';
 const PAYMENT_BANK_NAME    = process.env.PAYMENT_BANK_NAME   || 'SEA';
-const PAYMENT_BANK_NUMBER  = process.env.PAYMENT_BANK_NUMBER || '901542678431';
+const PAYMENT_BANK_NUMBER  = process.env.PAYMENT_BANK_NUMBER || '1234567890';
 const PAYMENT_BANK_HOLDER  = process.env.PAYMENT_BANK_HOLDER || 'Bot Owner';
-const PAYMENT_DANA         = process.env.PAYMENT_DANA        || '083195510279';
-const PAYMENT_CONTACT      = process.env.PAYMENT_CONTACT     || '@Bryan3797';
+const PAYMENT_DANA         = process.env.PAYMENT_DANA        || '081234567890';
+const PAYMENT_CONTACT      = process.env.PAYMENT_CONTACT     || '@adminusername';
 const TRIAL_DURATION_HOURS = parseInt(process.env.TRIAL_DURATION_HOURS || '24');
 // KICK_LIMIT dihapus — unlimited (semua anggota non-admin bisa dikick)
 const HEALTH_API_KEY = process.env.HEALTH_API_KEY || crypto.randomBytes(16).toString('hex');
@@ -1422,7 +1422,8 @@ tgBot.command('logout', requireAccess, async (ctx) => {
         reconnectAttempts.delete(userId);
         conflictCooldowns.delete(userId);
         loginLocks.delete(userId);
-        await safeReply(ctx, '✅ Logout berhasil.', { ...KB_PRE_LOGIN });
+        const kb = await getKeyboard(userId);
+        await safeReply(ctx, '✅ Logout berhasil.', { ...kb });
     } catch (err) {
         await safeReply(ctx, `❌ Error: ${esc(err.message)}`);
     }
@@ -1710,7 +1711,8 @@ tgBot.hears('🚪 Logout WhatsApp', requireAccess, async (ctx) => {
         reconnectAttempts.delete(userId);
         conflictCooldowns.delete(userId);
         loginLocks.delete(userId);
-        await safeReply(ctx, '✅ Logout berhasil.', { ...KB_PRE_LOGIN });
+        const kb = await getKeyboard(userId);
+        await safeReply(ctx, '✅ Logout berhasil.', { ...kb });
     } catch (err) {
         await safeReply(ctx, `❌ Error: ${esc(err.message)}`);
     }
