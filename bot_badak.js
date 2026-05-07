@@ -693,7 +693,7 @@ async function liveMessage(ctx, initText, frameFn, interval = 900) {
             msg = await safeReply(ctx, initText);
         } catch (err2) {
             log('WARN', 'LiveMsg', `Gagal kirim pesan: ${err2.message}`);
-            return { stop: async () => {} };
+            return { stop: async () => {}, update: () => {} };
         }
     }
 
@@ -704,12 +704,21 @@ async function liveMessage(ctx, initText, frameFn, interval = 900) {
             const text = frameFn(frame);
             await ctx.telegram.editMessageText(msg.chat.id, msg.message_id, undefined, text, { parse_mode: 'Markdown' });
         } catch (err) {
-            // Abaikan error edit message (biasanya karena sudah dihapus)
+            // Jika message sudah tidak bisa diedit (dihapus/expired), hentikan interval
+            if (err.description && (
+                err.description.includes('message to edit not found') ||
+                err.description.includes('MESSAGE_ID_INVALID') ||
+                err.description.includes('message is not modified')
+            )) {
+                stopped = true;
+                clearInterval(timer);
+            }
         }
         frame++;
     }, interval);
 
     return {
+        update: () => {},
         stop: async (finalText) => {
             stopped = true;
             clearInterval(timer);
@@ -717,7 +726,8 @@ async function liveMessage(ctx, initText, frameFn, interval = 900) {
                 try {
                     await ctx.telegram.editMessageText(msg.chat.id, msg.message_id, undefined, finalText, { parse_mode: 'Markdown' });
                 } catch (err) {
-                    // Abaikan
+                    // Jika edit gagal, kirim pesan baru
+                    try { await safeReply(ctx, finalText); } catch (_) {}
                 }
             }
         }
@@ -1075,7 +1085,10 @@ Ketik /refreshqr untuk coba lagi.`);
                 startBackgroundActivitySpooler(sock, userId);
                 const kb = isAdmin(userId) ? KB_ADMIN_MAIN : KB_MAIN;
                 await safeReply(ctx, `✅ LOGIN WHATSAPP BERHASIL!\n\nMemuat daftar grup...`, { ...kb });
-                try { await showGroupPicker(ctx, userId, session); } catch (_) {}
+                try {
+                    await new Promise(r => setTimeout(r, 1500));
+                    await showGroupPicker(ctx, userId, session);
+                } catch (_) {}
             }
         });
         sock.ev.on('creds.update', () => { saveCreds(); });
@@ -1193,23 +1206,21 @@ async function showKickMenu(ctx, userId, session) {
             const isMe = p.id === myJid || p.id.split('@')[0] === myJid.split('@')[0];
             const isAdm = p.admin === 'admin' || p.admin === 'superadmin';
             return !isMe && !isAdm;
-        }).map(p => {
-            // Ambil pushName jika tersedia, lalu coba nomor dari p.id (format 62xxx@s.whatsapp.net)
-            // Jika LID (@lid), coba ambil dari p.notify atau p.name, fallback ke nomor pendek
+        }).map((p, idx) => {
+            // Coba ambil nama terbaik yang tersedia
             let displayName = '';
-            if (p.notify) {
-                displayName = p.notify; // nama yang diset user di WA
-            } else if (p.name) {
-                displayName = p.name;
+            if (p.notify && p.notify.trim()) {
+                displayName = p.notify.trim();
+            } else if (p.name && p.name.trim()) {
+                displayName = p.name.trim();
+            } else if (p.verifiedName && p.verifiedName.trim()) {
+                displayName = p.verifiedName.trim();
             } else if (p.id && p.id.includes('@s.whatsapp.net')) {
-                // Format normal — ambil nomor telepon
+                // Format normal — nomor telepon tersedia
                 displayName = '+' + p.id.split('@')[0];
-            } else if (p.id && p.id.includes('@lid')) {
-                // Format LID — coba ambil verifiedName atau fallback ke 8 digit terakhir
-                const lid = p.id.split('@')[0];
-                displayName = p.verifiedName || p.notify || ('....' + lid.slice(-8));
             } else {
-                displayName = p.id.split('@')[0];
+                // LID — tidak ada nomor, pakai nomor urut
+                displayName = `Anggota ${idx + 1}`;
             }
             return { jid: p.id, name: displayName.substring(0, 30) };
         });
@@ -1906,5 +1917,12 @@ tgBot.launch().then(async () => {
 
 process.on('SIGINT', () => { tgBot.stop('SIGINT'); process.exit(); });
 process.on('SIGTERM', () => { tgBot.stop('SIGTERM'); process.exit(); });
-process.on('uncaughtException', (err) => { log('ERROR', 'System', 'Uncaught Exception', err); });
-process.on('unhandledRejection', (reason) => { log('ERROR', 'System', 'Unhandled Rejection', reason); });
+process.on('uncaughtException', (err) => {
+    log('ERROR', 'System', `Uncaught Exception: ${err.message}`, err);
+    // Jangan exit — biarkan bot tetap jalan
+});
+process.on('unhandledRejection', (reason) => {
+    const msg = reason instanceof Error ? reason.message : String(reason);
+    log('ERROR', 'System', `Unhandled Rejection: ${msg}`);
+    // Jangan exit — biarkan bot tetap jalan
+});
