@@ -15,7 +15,7 @@ const http = require('http');
 
 // ╔══════════════════════════════════════════════════════════════╗
 // ║         W A - K I C K E R   B O T   v 6 . 3 . 0            ║
-// ║           NO-SPAM + XLSX SUPPORT                            ║
+// ║           NO-SPAM + ALL FIXED                               ║
 // ╚══════════════════════════════════════════════════════════════╝
 
 // ========== KONFIGURASI AWAL ==========
@@ -65,15 +65,12 @@ if (!fs.existsSync(ADMIN_FILES_DIR)) fs.mkdirSync(ADMIN_FILES_DIR, { recursive: 
 const TEMP_DIR = path.join(DATA_DIR, 'temp');
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
-// ========== LOAD XLSX ==========
 let XLSX = null;
 try {
     XLSX = require('xlsx');
-    console.log('✅ xlsx package loaded successfully - Fitur XLSX → VCF AKTIF!');
+    console.log('✅ xlsx package loaded successfully');
 } catch (e) {
-    console.log('⚠️  xlsx package tidak terinstall. Fitur XLSX → VCF tidak akan berfungsi.');
-    console.log('   Install dengan: npm install xlsx');
-    console.log('   Atau tambahkan "xlsx" di package.json');
+    console.log('⚠️  xlsx package tidak terinstall. Fitur /cv_xlsx_to_vcf tidak akan berfungsi.');
 }
 
 // ========== DATABASE JSON ==========
@@ -692,13 +689,13 @@ async function finalizeCvVcfToTxt(ctx, userId, state) {
     }
 }
 
-// --- 3. XLSX to VCF (FULLY WORKING) ---
+// --- 3. XLSX to VCF ---
 async function handleCvXlsxToVcfStart(ctx, userId) {
     if (!XLSX) {
-        return safeReply(ctx, '❌ Fitur XLSX → VCF sedang dalam perbaikan.\n\nSilakan gunakan:\n1. 📝 TXT2VCF Auto\n2. Atau konversi manual XLSX ke CSV dulu');
+        return safeReply(ctx, '❌ Fitur XLSX → VCF memerlukan package xlsx.\n\nAdmin perlu install:\n`npm install xlsx`');
     }
     setState(userId, { mode: 'cv_xlsx_to_vcf', waiting: true });
-    await safeReply(ctx, `📊 *XLSX → VCF*\n\nSilakan kirim file .xlsx.\nBot akan memindai semua cell dan mengambil nomor telepon yang valid.`);
+    await safeReply(ctx, `📊 *XLSX → VCF*\n\nSilakan kirim file .xlsx.\nBot akan memindai semua cell dan mengambil nomor telepon yang valid.\n\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleCvXlsxToVcfFile(ctx, userId, state, doc) {
@@ -759,7 +756,7 @@ async function handleCvXlsxToVcfFile(ctx, userId, state, doc) {
 // --- 4. TXT2VCF Auto-Detect ---
 async function handleTxt2VcfStart(ctx, userId) {
     setState(userId, { mode: 'txt2vcf', waiting: true });
-    await safeReply(ctx, `📝 *TXT2VCF Auto-Detect*\n\nKirim file .txt untuk langsung dikonversi menjadi VCF.\n\nFormat yang didukung:\n• Nomor di depan: \`08123 Nama\`\n• Nama di depan: \`Nama 08123\`\n• Separator: \`Nama|08123\` atau \`Nama,08123\`\n• Hanya nomor: \`081234567890\``);
+    await safeReply(ctx, `📝 *TXT2VCF Auto-Detect*\n\nKirim file .txt untuk langsung dikonversi menjadi VCF.\n\nFormat yang didukung:\n• Nomor di depan: \`08123 Nama\`\n• Nama di depan: \`Nama 08123\`\n• Separator: \`Nama|08123\` atau \`Nama,08123\`\n• Hanya nomor: \`081234567890\`\n\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleTxt2VcfFile(ctx, userId, state, doc) {
@@ -788,7 +785,7 @@ async function handleTxt2VcfFile(ctx, userId, state, doc) {
     }
 }
 
-// --- 5. Gabung TXT (NO-SPAM) ---
+// --- 5. Gabung TXT ---
 async function handleGabungTxtStart(ctx, userId) {
     setState(userId, { mode: 'gabungtxt', files: [], fileNames: [], collecting: true });
     await safeReply(ctx, `📥 *Mengumpulkan file TXT...*\n\nKirim file lain atau ketik /done`);
@@ -855,7 +852,7 @@ async function finalizeGabungTxt(ctx, userId, state) {
     }
 }
 
-// --- 6. Gabung VCF (NO-SPAM) ---
+// --- 6. Gabung VCF ---
 async function handleGabungVcfStart(ctx, userId) {
     setState(userId, { mode: 'gabungvcf', files: [], fileNames: [], collecting: true });
     await safeReply(ctx, `📥 *Mengumpulkan file VCF...*\n\nKirim file lain atau ketik /done`);
@@ -922,7 +919,7 @@ async function finalizeGabungVcf(ctx, userId, state) {
 // --- 7. Pecah VCF (bagian) ---
 async function handlePecahFileStart(ctx, userId) {
     setState(userId, { mode: 'pecahfile', waiting: true });
-    await safeReply(ctx, `✂️ *PECAH VCF (BAGIAN)*\n\nSilakan kirim file .vcf yang ingin dipecah.`);
+    await safeReply(ctx, `✂️ *PECAH VCF (BAGIAN)*\n\nSilakan kirim file .vcf yang ingin dipecah.\n\nKetik /batal untuk membatalkan.`);
 }
 
 async function handlePecahFileVcf(ctx, userId, state, doc) {
@@ -947,7 +944,7 @@ async function handlePecahFileVcf(ctx, userId, state, doc) {
         ]);
 
         setState(userId, { mode: 'pecahfile', phase: 'choose_parts', contacts, baseName });
-        await safeReply(ctx, `📋 Total kontak: ${contacts.length}\n\nPilih jumlah bagian:`, { ...keyboard });
+        await safeReply(ctx, `📋 *File:* ${fname}\n📊 *Total kontak:* ${contacts.length}\n\nPilih jumlah bagian:`, { ...keyboard });
     } catch (err) {
         log('ERROR', 'PecahFile', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
@@ -959,7 +956,7 @@ async function handlePecahFileVcf(ctx, userId, state, doc) {
 async function handlePecahCtcStart(ctx, userId, jumlah) {
     const count = Math.max(1, Math.min(10000, parseInt(jumlah) || 100));
     setState(userId, { mode: 'pecahctc', countPerFile: count, waiting: true });
-    await safeReply(ctx, `✂️ *PECAH VCF (${count} kontak/file)*\n\nSilakan kirim file .vcf yang ingin dipecah.`);
+    await safeReply(ctx, `✂️ *PECAH VCF (${count} kontak/file)*\n\nSilakan kirim file .vcf yang ingin dipecah.\n\nKetik /batal untuk membatalkan.`);
 }
 
 async function handlePecahCtcFile(ctx, userId, state, doc) {
@@ -979,6 +976,8 @@ async function handlePecahCtcFile(ctx, userId, state, doc) {
         const countPerFile = state.countPerFile;
         const baseName     = fname.replace(/\.vcf$/i, '');
         const totalParts   = Math.ceil(contacts.length / countPerFile);
+
+        await safeReply(ctx, `📋 *File:* ${fname}\n📊 *Total kontak:* ${contacts.length}\n📏 *Per file:* ${countPerFile} kontak\n📁 *Menjadi:* ${totalParts} bagian\n\n⏳ Memproses...`);
 
         for (let i = 0; i < totalParts; i++) {
             const partContacts = contacts.slice(i * countPerFile, (i + 1) * countPerFile);
@@ -1000,7 +999,7 @@ async function handlePecahCtcFile(ctx, userId, state, doc) {
 // --- 9. Tambah Kontak ---
 async function handleAddCtcStart(ctx, userId) {
     setState(userId, { mode: 'addctc', phase: 'waiting_vcf' });
-    await safeReply(ctx, `➕ *TAMBAH KONTAK VCF*\n\nSilakan kirim file .vcf yang ingin ditambahi kontak.`);
+    await safeReply(ctx, `➕ *TAMBAH KONTAK VCF*\n\nSilakan kirim file .vcf yang ingin ditambahi kontak.\n\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleAddCtcFile(ctx, userId, state, doc) {
@@ -1018,7 +1017,7 @@ async function handleAddCtcFile(ctx, userId, state, doc) {
         }
 
         setState(userId, { mode: 'addctc', phase: 'waiting_contacts', existingContacts: contacts, fileName: fname });
-        await safeReply(ctx, `📋 File: ${fname}\n👤 Kontak saat ini: ${contacts.length}\n\nSilakan kirim kontak tambahan dalam format teks (satu per baris):\nNama Baru|081234567890\n081987654321\n+628123456789|Nama Lain`);
+        await safeReply(ctx, `📋 *File:* ${fname}\n👤 *Kontak saat ini:* ${contacts.length}\n\n${'─'.repeat(30)}\nSilakan kirim kontak tambahan dalam format teks (satu per baris):\n\nContoh:\nNama Baru|081234567890\n081987654321\n+628123456789|Nama Lain\n\n${'─'.repeat(30)}\nKetik /done jika selesai atau /batal untuk batal.`);
     } catch (err) {
         log('ERROR', 'AddCtc', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
@@ -1029,7 +1028,7 @@ async function handleAddCtcFile(ctx, userId, state, doc) {
 // --- 10. Hapus Kontak ---
 async function handleDelCtcStart(ctx, userId) {
     setState(userId, { mode: 'delctc', phase: 'waiting_vcf' });
-    await safeReply(ctx, `➖ *HAPUS KONTAK VCF*\n\nSilakan kirim file .vcf yang ingin dihapus kontaknya.`);
+    await safeReply(ctx, `➖ *HAPUS KONTAK VCF*\n\nSilakan kirim file .vcf yang ingin dihapus kontaknya.\n\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleDelCtcFile(ctx, userId, state, doc) {
@@ -1046,16 +1045,16 @@ async function handleDelCtcFile(ctx, userId, state, doc) {
             return safeReply(ctx, '❌ Tidak ada kontak valid dalam file.');
         }
 
-        let preview      = `📋 *DAFTAR KONTAK*\n${'─'.repeat(30)}\nTotal: ${contacts.length} kontak\n\n`;
-        const maxShow    = Math.min(50, contacts.length);
+        let preview = `📋 *DAFTAR KONTAK*\n${'─'.repeat(30)}\n📇 *File:* ${fname}\n👤 *Total:* ${contacts.length} kontak\n\n`;
+        const maxShow = Math.min(30, contacts.length);
         for (let i = 0; i < maxShow; i++) {
             const c = contacts[i];
             preview += `${i + 1}. ${c.name} → ${c.phone}\n`;
         }
-        if (contacts.length > 50) {
-            preview += `\n... dan ${contacts.length - 50} kontak lainnya (gunakan nomor urut hingga ${contacts.length})`;
+        if (contacts.length > 30) {
+            preview += `\n... dan ${contacts.length - 30} kontak lainnya`;
         }
-        preview += `\n\n${'─'.repeat(30)}\nKetik nomor urut yang ingin dihapus:\nFormat: 1,3,5-8,10`;
+        preview += `\n${'─'.repeat(30)}\nKetik nomor urut yang ingin dihapus:\nFormat: 1,3,5-8,10\n\nKetik /done jika selesai atau /batal untuk batal.`;
 
         setState(userId, { mode: 'delctc', phase: 'waiting_input', contacts, fileName: fname });
         await safeReply(ctx, preview);
@@ -1069,7 +1068,7 @@ async function handleDelCtcFile(ctx, userId, state, doc) {
 // --- 11. Hitung Kontak ---
 async function handleHitungCtcStart(ctx, userId) {
     setState(userId, { mode: 'hitungctc', waiting: true });
-    await safeReply(ctx, `🔢 *HITUNG KONTAK VCF*\n\nSilakan kirim file .vcf yang ingin dihitung.`);
+    await safeReply(ctx, `🔢 *HITUNG KONTAK VCF*\n\nSilakan kirim file .vcf yang ingin dihitung.\n\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleHitungCtcFile(ctx, userId, state, doc) {
@@ -1094,7 +1093,7 @@ async function handleHitungCtcFile(ctx, userId, state, doc) {
             else seenPhone.add(c.phone);
         }
 
-        const infoText = `🔢 HASIL HITUNG KONTAK VCF\n${'─'.repeat(30)}\n📇 File : ${fname}\n👤 Total kontak : ${contacts.length}\n✅ Punya nama : ${withName}\n❓ Tanpa nama : ${withoutName}\n📞 Nomor unik : ${seenPhone.size}\n🚫 Nomor duplikat : ${dupCount}`;
+        const infoText = `🔢 *HASIL HITUNG KONTAK VCF*\n${'─'.repeat(30)}\n📇 File : ${fname}\n👤 Total kontak : ${contacts.length}\n✅ Punya nama : ${withName}\n❓ Tanpa nama : ${withoutName}\n📞 Nomor unik : ${seenPhone.size}\n🚫 Nomor duplikat : ${dupCount}`;
         await safeReply(ctx, infoText);
         clearState(userId);
     } catch (err) {
@@ -1107,7 +1106,7 @@ async function handleHitungCtcFile(ctx, userId, state, doc) {
 // --- 12. Rename Kontak ---
 async function handleRenamectcStart(ctx, userId) {
     setState(userId, { mode: 'renamectc', phase: 'waiting_vcf' });
-    await safeReply(ctx, `✏️ *RENAME KONTAK VCF*\n\nSilakan kirim file .vcf yang ingin direname kontaknya.`);
+    await safeReply(ctx, `✏️ *RENAME KONTAK VCF*\n\nSilakan kirim file .vcf yang ingin direname kontaknya.\n\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleRenamectcFile(ctx, userId, state, doc) {
@@ -1124,11 +1123,14 @@ async function handleRenamectcFile(ctx, userId, state, doc) {
             return safeReply(ctx, '❌ Tidak ada kontak valid dalam file.');
         }
 
-        let preview = `📋 *PREVIEW KONTAK*\n${'─'.repeat(30)}\n`;
+        let preview = `📋 *PREVIEW KONTAK*\n${'─'.repeat(30)}\n📇 *File:* ${fname}\n👤 *Total:* ${contacts.length} kontak\n\n`;
         contacts.slice(0, 5).forEach((c, i) => {
             preview += `${i + 1}. ${c.name} → ${c.phone}\n`;
         });
-        preview += `${'─'.repeat(30)}\nTotal: ${contacts.length} kontak\n\nPilih metode rename:`;
+        if (contacts.length > 5) {
+            preview += `\n... dan ${contacts.length - 5} kontak lainnya`;
+        }
+        preview += `\n${'─'.repeat(30)}\nPilih metode rename:`;
 
         const keyboard = Markup.inlineKeyboard([
             [Markup.button.callback('➕ Tambah Prefix', 'rename_prefix')],
@@ -1160,7 +1162,7 @@ async function handleRenameFileStart(ctx, userId, newName) {
     }
     const trimmedName = newName.trim();
     setState(userId, { mode: 'renamefile', newName: trimmedName, waiting: true });
-    await safeReply(ctx, `✏️ *RENAME FILE*\n\nSilakan kirim file yang ingin diganti namanya.\nNama baru: ${trimmedName} (ekstensi akan dipertahankan)`);
+    await safeReply(ctx, `✏️ *RENAME FILE*\n\nSilakan kirim file yang ingin diganti namanya.\nNama baru: ${trimmedName} (ekstensi akan dipertahankan)\n\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleRenameFile(ctx, userId, state, doc) {
@@ -1181,13 +1183,13 @@ async function handleRenameFile(ctx, userId, state, doc) {
 // --- 14. Pesan ke TXT ---
 async function handleTotxtStart(ctx, userId) {
     setState(userId, { mode: 'totxt', messages: [], active: true });
-    await safeReply(ctx, `📄 *PESAN KE TXT*\n\nMode pengumpulan pesan aktif.\nSetiap pesan teks yang kamu kirim akan disimpan.\n\nKetik /done untuk generate file TXT.\n\nMaks 500 pesan.`);
+    await safeReply(ctx, `📄 *PESAN KE TXT*\n\nMode pengumpulan pesan aktif.\nSetiap pesan teks yang kamu kirim akan disimpan.\n\nKetik /done untuk generate file TXT.\n\nMaks 500 pesan.\n\nKetik /batal untuk membatalkan.`);
 }
 
 // --- 15. Rekap Group ---
 async function handleRekapGroup(ctx, userId) {
     setState(userId, { mode: 'rekapgroup', phase: 'waiting_photo' });
-    await safeReply(ctx, `📸 *Rekap Grup*\n\nSilakan kirim foto/screenshot info grup WhatsApp.\nAtau kirim foto dengan caption format:\nNamaGrup|JumlahMember`);
+    await safeReply(ctx, `📸 *Rekap Grup*\n\nSilakan kirim foto/screenshot info grup WhatsApp.\nAtau kirim foto dengan caption format:\nNamaGrup|JumlahMember\n\nKetik /batal untuk membatalkan.`);
 }
 
 // --- 16. Admin File Manager ---
@@ -1206,7 +1208,7 @@ async function handleCvAdminFile(ctx, userId) {
 
 async function handleAdminFileUpload(ctx, userId) {
     setState(userId, { mode: 'cvadminfile_upload', waiting: true });
-    await safeReply(ctx, `📤 Silakan kirim file yang ingin diupload.`);
+    await safeReply(ctx, `📤 Silakan kirim file yang ingin diupload.\n\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleAdminFileUploadFile(ctx, userId, state, doc) {
@@ -1969,7 +1971,7 @@ process.on('uncaughtException', (err) => {
 
 tgBot.launch().then(() => {
     console.log('\n╔══════════════════════════════════════════╗');
-    console.log('║  WA KICKER BOT v6.3.0                    ║');
+    console.log('║  WA KICKER BOT v6.3.0 - ALL FIXED       ║');
     console.log('║  NO-SPAM + XLSX SUPPORT                  ║');
     console.log('╚══════════════════════════════════════════╝\n');
     console.log(`📋 Admin IDs  : ${ADMIN_IDS.join(', ')}`);
@@ -1977,11 +1979,14 @@ tgBot.launch().then(() => {
     console.log(`📦 Max file   : ${MAX_FILE_SIZE_MB}MB`);
     console.log(`👥 Max kontak : ${MAX_CONTACTS_PER_FILE.toLocaleString()}/file`);
     console.log(`⏱️  DL timeout : ${DOWNLOAD_TIMEOUT_MS / 1000}s`);
-    console.log(`\n✨ FITUR AKTIF:`);
+    console.log(`\n✨ SEMUA FITUR SUDAH DI-FIX:`);
     console.log(`   - TXT → VCF (NO-SPAM)`);
     console.log(`   - VCF → TXT (NO-SPAM)`);
     console.log(`   - GABUNG TXT/VCF (NO-SPAM)`);
-    console.log(`   - XLSX → VCF: ${XLSX ? '✅ AKTIF' : '❌ TIDAK AKTIF (install xlsx)'}`);
+    console.log(`   - PECAH VCF (NO-SPAM)`);
+    console.log(`   - TAMBAH/HAPUS KONTAK (NO-SPAM)`);
+    console.log(`   - RENAME KONTAK (NO-SPAM)`);
+    console.log(`   - XLSX → VCF: ${XLSX ? '✅ AKTIF' : '❌ INSTALL xlsx'}`);
     console.log(`\n🚀 Bot siap digunakan!\n`);
 }).catch(err => {
     console.error('❌ Gagal launch bot:', err.message);
