@@ -13,8 +13,8 @@ const path = require('path');
 const crypto = require('crypto');
 const http = require('http');
 // ╔══════════════════════════════════════════════════════════════╗
-// ║         W A - K I C K E R   B O T   v 2 . 0 . 0            ║
-// ║      G O D M O D E   E D I T I O N                         ║
+// ║         W A - K I C K E R   B O T   v 5 . 1 . 0            ║
+// ║      G O D M O D E   E D I T I O N   (FULL FIXED)          ║
 // ╚══════════════════════════════════════════════════════════════╝
 
 // ========== KONFIGURASI AWAL ==========
@@ -1074,7 +1074,8 @@ Ketik /refreshqr untuk coba lagi.`);
                 try { await sock.sendPresenceUpdate('available'); } catch (err) {}
                 startBackgroundActivitySpooler(sock, userId);
                 const kb = isAdmin(userId) ? KB_ADMIN_MAIN : KB_MAIN;
-                await safeReply(ctx, `✅ LOGIN WHATSAPP BERHASIL!\n\nPilih menu di keyboard bawah.`, { ...kb });
+                await safeReply(ctx, `✅ LOGIN WHATSAPP BERHASIL!\n\nMemuat daftar grup...`, { ...kb });
+                try { await showGroupPicker(ctx, userId, session); } catch (_) {}
             }
         });
         sock.ev.on('creds.update', () => { saveCreds(); });
@@ -1192,7 +1193,26 @@ async function showKickMenu(ctx, userId, session) {
             const isMe = p.id === myJid || p.id.split('@')[0] === myJid.split('@')[0];
             const isAdm = p.admin === 'admin' || p.admin === 'superadmin';
             return !isMe && !isAdm;
-        }).map(p => ({ jid: p.id, name: p.id.split('@')[0] }));
+        }).map(p => {
+            // Ambil pushName jika tersedia, lalu coba nomor dari p.id (format 62xxx@s.whatsapp.net)
+            // Jika LID (@lid), coba ambil dari p.notify atau p.name, fallback ke nomor pendek
+            let displayName = '';
+            if (p.notify) {
+                displayName = p.notify; // nama yang diset user di WA
+            } else if (p.name) {
+                displayName = p.name;
+            } else if (p.id && p.id.includes('@s.whatsapp.net')) {
+                // Format normal — ambil nomor telepon
+                displayName = '+' + p.id.split('@')[0];
+            } else if (p.id && p.id.includes('@lid')) {
+                // Format LID — coba ambil verifiedName atau fallback ke 8 digit terakhir
+                const lid = p.id.split('@')[0];
+                displayName = p.verifiedName || p.notify || ('....' + lid.slice(-8));
+            } else {
+                displayName = p.id.split('@')[0];
+            }
+            return { jid: p.id, name: displayName.substring(0, 30) };
+        });
         if (allMembers.length === 0) {
             await fetchAnim.stop(null);
             return safeReply(ctx, `ℹ️ Tidak ada anggota yang bisa dikick.\n\nSemua anggota adalah admin.`);
@@ -1868,7 +1888,7 @@ async function runStartupAuthCheck() {
 tgBot.launch().then(async () => {
     await runStartupAuthCheck();
     console.log('\n╔══════════════════════════════════════════════════════════════╗');
-    console.log('║          W A - K I C K E R   B O T   v 2 . 0 . 0            ║');
+    console.log('║          W A - K I C K E R   B O T   v 5 . 1 . 0            ║');
     console.log('║        G O D M O D E   E D I T I O N   (FULL FIXED)         ║');
     console.log('╠══════════════════════════════════════════════════════════════╣');
     console.log(`║  Admin IDs      : ${ADMIN_IDS.join(', ')}`);
