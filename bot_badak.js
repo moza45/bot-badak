@@ -2369,48 +2369,299 @@ tgBot.action('back_userlist', async (ctx) => {
     });
 });
 
-tgBot.action('close_userlist', async (ctx) => {
-    await ctx.deleteMessage();
+// ========== PREMIUM SYSTEM WITH BUTTONS ==========
+
+// Data paket
+const PREMIUM_PACKAGES = {
+    '30hari': { name: 'Paket Reguler', duration: 30, price: 50000, priceFormatted: 'Rp 50.000' },
+    '90hari': { name: 'Paket Pro', duration: 90, price: 120000, priceFormatted: 'Rp 120.000' },
+    'lifetime': { name: 'Paket Lifetime', duration: 9999, price: 300000, priceFormatted: 'Rp 300.000' }
+};
+
+// Menu pilihan paket dengan tombol
+async function showPackageMenu(ctx) {
+    const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('💎 Paket Reguler (30 hari) - Rp 50.000', 'order_30hari')],
+        [Markup.button.callback('💎 Paket Pro (90 hari) - Rp 120.000', 'order_90hari')],
+        [Markup.button.callback('💎 Paket Lifetime (Selamanya) - Rp 300.000', 'order_lifetime')],
+        [Markup.button.callback('❌ Batal', 'order_cancel')]
+    ]);
+    
+    await safeReply(ctx, `⭐ *PILIH PAKET PREMIUM*\n\n${'─'.repeat(30)}\nPilih paket yang ingin dibeli:\n\n💎 *Paket Reguler* - 30 hari\n💰 Rp 50.000\n\n💎 *Paket Pro* - 90 hari\n💰 Rp 120.000\n\n💎 *Paket Lifetime* - Selamanya\n💰 Rp 300.000\n${'─'.repeat(30)}`, keyboard);
+}
+
+// Handler order paket
+tgBot.action(/^order_(30hari|90hari|lifetime)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const userId = ctx.from.id;
+    const username = ctx.from.username || ctx.from.first_name || 'User';
+    const packageKey = ctx.match[1];
+    const pkg = PREMIUM_PACKAGES[packageKey];
+    
+    if (!pkg) {
+        return ctx.editMessageText('❌ Paket tidak valid.');
+    }
+    
+    // Simpan order pending
+    const orderId = Date.now();
+    const order = {
+        id: orderId,
+        userId: userId,
+        username: username,
+        packageKey: packageKey,
+        packageName: pkg.name,
+        duration: pkg.duration,
+        price: pkg.price,
+        priceFormatted: pkg.priceFormatted,
+        status: 'pending',
+        date: new Date().toISOString()
+    };
+    
+    db.addPendingPayment(order);
+    
+    // Notifikasi ke user
+    const userMessage = `✅ *ORDER DITERIMA*\n\n${'─'.repeat(30)}\n📦 Paket: ${pkg.name}\n💰 Harga: ${pkg.priceFormatted}\n📅 Durasi: ${pkg.duration === 9999 ? 'Selamanya' : pkg.duration + ' hari'}\n${'─'.repeat(30)}\n\n💳 *INSTRUKSI PEMBAYARAN:*\n🏦 Bank: ${PAYMENT_BANK_NAME}\n📞 No Rek: ${PAYMENT_BANK_NUMBER}\n👤 A.n: ${PAYMENT_BANK_HOLDER}\n📱 Dana: ${PAYMENT_DANA}\n\n📩 Konfirmasi ke: ${PAYMENT_CONTACT}\n\n⏳ Menunggu konfirmasi pembayaran dari admin.`;
+    
+    await ctx.editMessageText(userMessage);
+    
+    // Notifikasi ke semua admin
+    for (const adminId of ADMIN_IDS) {
+        try {
+            const adminKeyboard = Markup.inlineKeyboard([
+                [Markup.button.callback('✅ Approve', `approve_${orderId}`), Markup.button.callback('❌ Reject', `reject_${orderId}`)]
+            ]);
+            
+            await tgBot.telegram.sendMessage(adminId, `🛒 *ORDER BARU!*\n\n${'─'.repeat(30)}\n👤 User: ${username} (${userId})\n📦 Paket: ${pkg.name}\n💰 Harga: ${pkg.priceFormatted}\n📅 Durasi: ${pkg.duration === 9999 ? 'Selamanya' : pkg.duration + ' hari'}\n📅 Tanggal: ${formatDate(new Date().toISOString())}\n${'─'.repeat(30)}\n\nKlik tombol di bawah untuk konfirmasi:`, adminKeyboard);
+        } catch (err) {
+            log('ERROR', 'Premium', `Gagal kirim notif ke admin ${adminId}: ${err.message}`);
+        }
+    }
+    
+    await safeReply(ctx, `📢 *NOTIFIKASI TELAH DIKIRIM KE ADMIN*\n\nSilakan lakukan pembayaran dan konfirmasi ke admin.\n\nAdmin akan mengaktifkan paket setelah pembayaran diverifikasi.`);
 });
 
-// Command /revoke (manual via command)
-tgBot.command('revoke', async (ctx) => {
+// Handler Approve
+tgBot.action(/^approve_(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    
     if (!isAdmin(ctx.from.id)) {
-        return safeReply(ctx, '⛔ Hanya admin!');
+        return ctx.editMessageText('⛔ Akses ditolak. Hanya admin.');
     }
     
-    const args = ctx.message.text.split(' ');
-    if (args.length < 2) {
-        return safeReply(ctx, `📋 *CARA REVOKE*\n\n/revoke [user_id]\n\nContoh: /revoke 123456789`);
+    const orderId = parseInt(ctx.match[1]);
+    const payments = db.getAllPendingPayments();
+    const order = payments.find(p => p.id === orderId);
+    
+    if (!order) {
+        return ctx.editMessageText('❌ Order tidak ditemukan atau sudah diproses.');
     }
     
-    const userId = parseInt(args[1]);
-    if (isNaN(userId)) {
-        return safeReply(ctx, '❌ ID user tidak valid.');
-    }
+    // Aktifkan paket untuk user
+    const userId = order.userId;
+    const pkg = PREMIUM_PACKAGES[order.packageKey];
     
-    const user = db.getUser(userId);
+    let user = db.getUser(userId);
     if (!user) {
-        return safeReply(ctx, `❌ User dengan ID ${userId} tidak ditemukan.`);
+        user = { id: userId, role: 'regular', hadTrial: 1, notifiedExpiry: 0 };
     }
     
-    db.deleteUser(userId);
-    
-    if (userSessions.has(userId)) {
-        const session = userSessions.get(userId);
-        if (session?.sock) {
-            try {
-                await session.sock.logout();
-            } catch (err) {}
-        }
-        userSessions.delete(userId);
+    // Hitung expired date
+    let expiresAt;
+    if (pkg.duration === 9999) {
+        expiresAt = new Date('2099-12-31').toISOString(); // Lifetime
+    } else {
+        expiresAt = new Date();
+        expiresAt.setDate(expiresAt.getDate() + pkg.duration);
+        expiresAt = expiresAt.toISOString();
     }
     
-    await safeReply(ctx, `✅ *REVOKE BERHASIL!*\n\nAkses user ID: ${userId} telah dicabut.`);
+    user.role = 'regular';
+    user.expiresAt = expiresAt;
+    user.package = pkg.name;
+    user.activatedAt = new Date().toISOString();
     
+    db.saveUser(user);
+    db.removePendingPayment(userId);
+    
+    // Notifikasi ke user yang di-approve
     try {
-        await tgBot.telegram.sendMessage(userId, `🔴 *AKSES ANDA DICABUT!*\n\nHubungi admin untuk info lebih lanjut.\n📩 Kontak: ${PAYMENT_CONTACT}`);
+        await tgBot.telegram.sendMessage(userId, `🎉 *PEMBAYARAN DIKONFIRMASI!*\n\n${'─'.repeat(30)}\n✅ Paket ${pkg.name} telah aktif!\n📅 Berlaku hingga: ${formatDate(expiresAt)}\n${'─'.repeat(30)}\n\nTerima kasih telah menggunakan layanan kami! 🚀`);
+    } catch (err) {
+        log('ERROR', 'Approve', `Gagal kirim notif ke user ${userId}: ${err.message}`);
+    }
+    
+    await ctx.editMessageText(`✅ *ORDER DIAPPROVE*\n\n👤 User: ${order.username} (${userId})\n📦 Paket: ${pkg.name}\n📅 Expires: ${formatDate(expiresAt)}\n\nUser telah mendapatkan akses premium.`);
+});
+
+// Handler Reject
+tgBot.action(/^reject_(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    
+    if (!isAdmin(ctx.from.id)) {
+        return ctx.editMessageText('⛔ Akses ditolak. Hanya admin.');
+    }
+    
+    const orderId = parseInt(ctx.match[1]);
+    const payments = db.getAllPendingPayments();
+    const order = payments.find(p => p.id === orderId);
+    
+    if (!order) {
+        return ctx.editMessageText('❌ Order tidak ditemukan atau sudah diproses.');
+    }
+    
+    db.removePendingPayment(order.userId);
+    
+    // Notifikasi ke user yang di-reject
+    try {
+        await tgBot.telegram.sendMessage(order.userId, `❌ *PEMBAYARAN DITOLAK*\n\n${'─'.repeat(30)}\nMohon periksa kembali pembayaran Anda.\n\nSilakan order ulang atau hubungi admin: ${PAYMENT_CONTACT}\n${'─'.repeat(30)}`);
+    } catch (err) {
+        log('ERROR', 'Reject', `Gagal kirim notif ke user ${order.userId}: ${err.message}`);
+    }
+    
+    await ctx.editMessageText(`❌ *ORDER DIREJECT*\n\n👤 User: ${order.username} (${order.userId})\n📦 Paket: ${order.packageName}\n\nOrder telah dibatalkan.`);
+});
+
+// Cancel order
+tgBot.action('order_cancel', async (ctx) => {
+    await ctx.answerCbQuery('Dibatalkan');
+    await ctx.editMessageText('✖ Pembelian dibatalkan.\n\nKetik /beli untuk order lagi.');
+});
+
+// ========== MENU USER LIST DENGAN REVOKE ==========
+
+// Handler User List dengan tombol Revoke
+tgBot.hears('👥 User List', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) {
+        return safeReply(ctx, '⛔ Akses ditolak. Hanya admin.');
+    }
+    
+    const users = db.getAllUsers();
+    if (users.length === 0) {
+        return safeReply(ctx, '👥 Belum ada user terdaftar.');
+    }
+    
+    // Kirim daftar user dengan tombol revoke per user
+    for (const user of users) {
+        const userId = user.id;
+        let userInfo = '';
+        
+        // Ambil username dari Telegram (jika bot punya chat dengan user)
+        let username = 'Unknown';
+        try {
+            const chat = await tgBot.telegram.getChat(userId);
+            username = chat.username || chat.first_name || userId.toString();
+        } catch (err) {
+            username = userId.toString();
+        }
+        
+        const role = user.role === 'regular' ? '⭐ PREMIUM' : user.role === 'trial' ? '🎁 TRIAL' : '❓ NONE';
+        const expiry = user.role === 'regular' ? formatDate(user.expiresAt) : user.role === 'trial' ? formatDate(user.trialExpiresAt) : '-';
+        const packageName = user.package || '-';
+        
+        const keyboard = Markup.inlineKeyboard([
+            [Markup.button.callback('🚫 Revoke Akses', `revoke_${userId}`)]
+        ]);
+        
+        await safeReply(ctx, `👤 *USER DETAIL*\n${'─'.repeat(30)}\n🆔 ID: ${userId}\n📛 Nama: ${username}\n📋 Role: ${role}\n📦 Paket: ${packageName}\n📅 Expires: ${expiry}\n${'─'.repeat(30)}`, keyboard);
+    }
+    
+    await safeReply(ctx, `📊 *TOTAL USER: ${users.length}*`);
+});
+
+// Handler Revoke
+tgBot.action(/^revoke_(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    
+    if (!isAdmin(ctx.from.id)) {
+        return ctx.editMessageText('⛔ Akses ditolak. Hanya admin.');
+    }
+    
+    const targetUserId = parseInt(ctx.match[1]);
+    const user = db.getUser(targetUserId);
+    
+    if (!user) {
+        return ctx.editMessageText('❌ User tidak ditemukan.');
+    }
+    
+    // Simpan nama user untuk notifikasi
+    let username = 'User';
+    try {
+        const chat = await tgBot.telegram.getChat(targetUserId);
+        username = chat.username || chat.first_name || targetUserId.toString();
     } catch (err) {}
+    
+    // Hapus akses user (set expired)
+    if (user.role === 'regular') {
+        user.role = 'expired';
+        user.expiresAt = new Date().toISOString();
+        db.saveUser(user);
+        
+        // Notifikasi ke user
+        try {
+            await tgBot.telegram.sendMessage(targetUserId, `⚠️ *AKSES ANDA DICABUT*\n\n${'─'.repeat(30)}\nAkses premium Anda telah dicabut oleh admin.\n\nSilakan hubungi admin untuk informasi lebih lanjut: ${PAYMENT_CONTACT}\n${'─'.repeat(30)}`);
+        } catch (err) {}
+        
+        await ctx.editMessageText(`✅ *AKSES DICABUT*\n\n👤 User: ${username} (${targetUserId})\n📋 Status: PREMIUM → EXPIRED\n\nUser telah kehilangan akses premium.`);
+    } else if (user.role === 'trial') {
+        user.role = 'trial_expired';
+        user.trialExpiresAt = new Date().toISOString();
+        db.saveUser(user);
+        
+        await ctx.editMessageText(`✅ *AKSES DICABUT*\n\n👤 User: ${username} (${targetUserId})\n📋 Status: TRIAL → EXPIRED\n\nUser telah kehilangan akses trial.`);
+    } else {
+        await ctx.editMessageText(`❌ User ${username} tidak memiliki akses aktif untuk dicabut.`);
+    }
+});
+
+// ========== UPDATE MENU PREMIUM ==========
+
+// Ganti handler /beli menjadi interaktif
+tgBot.command('beli', async (ctx) => {
+    await showPackageMenu(ctx);
+});
+
+// Ganti hears Premium
+tgBot.hears('⭐ Premium', async (ctx) => {
+    await showPackageMenu(ctx);
+});
+
+// Ganti hears /start untuk trial
+// Update trial handler jika diperlukan
+async function handleTrial(ctx) {
+    const userId = ctx.from.id;
+    const user = db.getUser(userId);
+    
+    if (user && user.hadTrial) {
+        return safeReply(ctx, `❌ Anda sudah pernah menggunakan trial.\n\nSilakan beli paket premium dengan klik tombol di bawah:`, 
+            Markup.inlineKeyboard([Markup.button.callback('⭐ Beli Premium', 'show_packages')]));
+    }
+    
+    const trialExpiresAt = new Date();
+    trialExpiresAt.setHours(trialExpiresAt.getHours() + TRIAL_DURATION_HOURS);
+    
+    const newUser = {
+        id: userId,
+        role: 'trial',
+        trialExpiresAt: trialExpiresAt.toISOString(),
+        hadTrial: 1,
+        notifiedExpiry: 0,
+        createdAt: new Date().toISOString()
+    };
+    
+    db.saveUser(newUser);
+    
+    await safeReply(ctx, `🎁 *TRIAL AKTIF!*\n\n${'─'.repeat(30)}\n✅ Anda mendapatkan trial ${TRIAL_DURATION_HOURS} jam\n📅 Berlaku hingga: ${formatDate(trialExpiresAt.toISOString())}\n${'─'.repeat(30)}\n\n🔧 *Fitur yang bisa digunakan:*\n• File Tools (semua)\n• Fitur WhatsApp (setelah login)\n\n💎 Setelah trial habis, silakan beli paket premium.`);
+}
+
+// Handler show packages dari tombol
+tgBot.action('show_packages', async (ctx) => {
+    await ctx.answerCbQuery();
+    await showPackageMenu(ctx);
+});
+
+// Update trial hears
+tgBot.hears('🎁 Coba Gratis (Trial)', async (ctx) => {
+    await handleTrial(ctx);
 });
 
 // ========== PERBAIKAN MENU BANTUAN ==========
