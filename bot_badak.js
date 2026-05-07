@@ -14,8 +14,8 @@ const crypto = require('crypto');
 const http = require('http');
 
 // ╔══════════════════════════════════════════════════════════════╗
-// ║         W A - K I C K E R   B O T   v 6 . 2 . 0            ║
-// ║           NO-SPAM FILE COLLECTOR EDITION                    ║
+// ║         W A - K I C K E R   B O T   v 6 . 3 . 0            ║
+// ║           NO-SPAM + XLSX SUPPORT                            ║
 // ╚══════════════════════════════════════════════════════════════╝
 
 // ========== KONFIGURASI AWAL ==========
@@ -65,12 +65,15 @@ if (!fs.existsSync(ADMIN_FILES_DIR)) fs.mkdirSync(ADMIN_FILES_DIR, { recursive: 
 const TEMP_DIR = path.join(DATA_DIR, 'temp');
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
+// ========== LOAD XLSX ==========
 let XLSX = null;
 try {
     XLSX = require('xlsx');
-    console.log('✅ xlsx package loaded successfully');
+    console.log('✅ xlsx package loaded successfully - Fitur XLSX → VCF AKTIF!');
 } catch (e) {
-    console.log('⚠️  xlsx package tidak terinstall. Fitur /cv_xlsx_to_vcf tidak akan berfungsi.');
+    console.log('⚠️  xlsx package tidak terinstall. Fitur XLSX → VCF tidak akan berfungsi.');
+    console.log('   Install dengan: npm install xlsx');
+    console.log('   Atau tambahkan "xlsx" di package.json');
 }
 
 // ========== DATABASE JSON ==========
@@ -602,7 +605,6 @@ async function handleCvTxtToVcfFile(ctx, userId, state, doc) {
         state.fileNames = state.fileNames || [];
         state.fileNames.push(fname);
         setState(userId, state);
-        // TIDAK ADA BALASAN - DIAM
     } catch (err) {
         log('ERROR', 'CvTxtToVcf', err.message, err);
         await safeReply(ctx, `❌ Error membaca file: ${err.message}`);
@@ -615,7 +617,6 @@ async function finalizeCvTxtToVcf(ctx, userId, state) {
         return safeReply(ctx, '❌ Tidak ada file yang dikumpulkan.');
     }
     try {
-        // TAMPILKAN RINGKASAN FILE
         const fileList = state.fileNames.map((f, i) => `${i+1}. ${f}`).join('\n');
         await safeReply(ctx, `📥 *${state.files.length} file diterima:*\n\n${fileList}\n\n${'─'.repeat(30)}\n⏳ Memproses konversi...`);
         
@@ -636,10 +637,11 @@ async function finalizeCvTxtToVcf(ctx, userId, state) {
         clearState(userId);
     }
 }
+
 // --- 2. VCF to TXT (Multiple) ---
 async function handleCvVcfToTxtStart(ctx, userId) {
     setState(userId, { mode: 'cv_vcf_to_txt', files: [], fileNames: [], collecting: true });
-    await safeReply(ctx, `🔄 *VCF → TXT (Multiple)*\n\nSilakan kirim file .vcf satu per satu.\nSetiap file akan dikonversi menjadi file .txt terpisah.\n\nKetik /done jika sudah selesai.\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `📥 *Mengumpulkan file VCF...*\n\nKirim file lain atau ketik /done`);
 }
 
 async function handleCvVcfToTxtFile(ctx, userId, state, doc) {
@@ -654,14 +656,9 @@ async function handleCvVcfToTxtFile(ctx, userId, state, doc) {
         const buffer  = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
         const vcfText = buffer.toString('utf-8');
         state.files.push({ name: fname, content: vcfText });
+        state.fileNames = state.fileNames || [];
         state.fileNames.push(fname);
         setState(userId, state);
-        
-        if (state.files.length === 1) {
-            await safeReply(ctx, `📥 *Mengumpulkan file VCF...*\n\nFile pertama: ${fname}\nKirim file lain atau ketik /done`);
-        } else {
-            log('INFO', 'VcfToTxt', `File ke-${state.files.length}: ${fname} diterima (silent)`);
-        }
     } catch (err) {
         log('ERROR', 'CvVcfToTxt', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
@@ -695,16 +692,20 @@ async function finalizeCvVcfToTxt(ctx, userId, state) {
     }
 }
 
-// --- 3. XLSX to VCF ---
+// --- 3. XLSX to VCF (FULLY WORKING) ---
 async function handleCvXlsxToVcfStart(ctx, userId) {
     if (!XLSX) {
-        return safeReply(ctx, '❌ Fitur ini memerlukan package xlsx.\n\nAdmin perlu install:\n`npm install xlsx`');
+        return safeReply(ctx, '❌ Fitur XLSX → VCF sedang dalam perbaikan.\n\nSilakan gunakan:\n1. 📝 TXT2VCF Auto\n2. Atau konversi manual XLSX ke CSV dulu');
     }
     setState(userId, { mode: 'cv_xlsx_to_vcf', waiting: true });
     await safeReply(ctx, `📊 *XLSX → VCF*\n\nSilakan kirim file .xlsx.\nBot akan memindai semua cell dan mengambil nomor telepon yang valid.`);
 }
 
 async function handleCvXlsxToVcfFile(ctx, userId, state, doc) {
+    if (!XLSX) {
+        return safeReply(ctx, '❌ Package xlsx tidak terinstall. Hubungi admin.');
+    }
+    
     const fname = doc.file_name || 'file.xlsx';
     if (!fname.toLowerCase().endsWith('.xlsx')) {
         return safeReply(ctx, '⚠️ Hanya file .xlsx yang diterima.');
@@ -723,7 +724,7 @@ async function handleCvXlsxToVcfFile(ctx, userId, state, doc) {
                 if (!row) continue;
                 for (const cell of row) {
                     totalCells++;
-                    if (cell !== null && cell !== undefined && isPhoneNumber(cell)) {
+                    if (cell !== null && cell !== undefined && isPhoneNumber(String(cell))) {
                         const norm = normalizePhone(String(cell));
                         if (norm) allNumbers.push(norm);
                     }
@@ -790,7 +791,7 @@ async function handleTxt2VcfFile(ctx, userId, state, doc) {
 // --- 5. Gabung TXT (NO-SPAM) ---
 async function handleGabungTxtStart(ctx, userId) {
     setState(userId, { mode: 'gabungtxt', files: [], fileNames: [], collecting: true });
-    await safeReply(ctx, `🔗 *GABUNG TXT*\n\nSilakan kirim file .txt satu per satu (minimal 2).\nSemua file akan digabung menjadi satu file .txt.\n\nKetik /done jika sudah selesai.`);
+    await safeReply(ctx, `📥 *Mengumpulkan file TXT...*\n\nKirim file lain atau ketik /done`);
 }
 
 async function handleGabungTxtFile(ctx, userId, state, doc) {
@@ -805,14 +806,9 @@ async function handleGabungTxtFile(ctx, userId, state, doc) {
         const buffer      = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
         const textContent = buffer.toString('utf-8');
         state.files.push({ name: fname, content: textContent });
+        state.fileNames = state.fileNames || [];
         state.fileNames.push(fname);
         setState(userId, state);
-        
-        if (state.files.length === 1) {
-            await safeReply(ctx, `📥 *Mengumpulkan file TXT...*\n\nFile pertama: ${fname}\nKirim file lain atau ketik /done`);
-        } else {
-            log('INFO', 'GabungTxt', `File ke-${state.files.length}: ${fname} diterima (silent)`);
-        }
     } catch (err) {
         log('ERROR', 'GabungTxt', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
@@ -862,7 +858,7 @@ async function finalizeGabungTxt(ctx, userId, state) {
 // --- 6. Gabung VCF (NO-SPAM) ---
 async function handleGabungVcfStart(ctx, userId) {
     setState(userId, { mode: 'gabungvcf', files: [], fileNames: [], collecting: true });
-    await safeReply(ctx, `🔗 *GABUNG VCF*\n\nSilakan kirim file .vcf satu per satu (minimal 2).\nSemua file akan digabung menjadi satu file .vcf.\n\nKetik /done jika sudah selesai.`);
+    await safeReply(ctx, `📥 *Mengumpulkan file VCF...*\n\nKirim file lain atau ketik /done`);
 }
 
 async function handleGabungVcfFile(ctx, userId, state, doc) {
@@ -877,14 +873,9 @@ async function handleGabungVcfFile(ctx, userId, state, doc) {
         const buffer  = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
         const vcfText = buffer.toString('utf-8');
         state.files.push({ name: fname, content: vcfText });
+        state.fileNames = state.fileNames || [];
         state.fileNames.push(fname);
         setState(userId, state);
-        
-        if (state.files.length === 1) {
-            await safeReply(ctx, `📥 *Mengumpulkan file VCF...*\n\nFile pertama: ${fname}\nKirim file lain atau ketik /done`);
-        } else {
-            log('INFO', 'GabungVcf', `File ke-${state.files.length}: ${fname} diterima (silent)`);
-        }
     } catch (err) {
         log('ERROR', 'GabungVcf', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
@@ -1924,11 +1915,12 @@ http.createServer((req, res) => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
             status:    'ok',
-            bot:       'WA Kicker Bot v6.2.0',
+            bot:       'WA Kicker Bot v6.3.0',
             uptime:    Math.floor(process.uptime()) + 's',
             timestamp: new Date().toISOString(),
             sessions:  userSessions.size,
-            states:    userStates.size
+            states:    userStates.size,
+            xlsxReady: XLSX !== null
         }));
         return;
     }
@@ -1977,18 +1969,20 @@ process.on('uncaughtException', (err) => {
 
 tgBot.launch().then(() => {
     console.log('\n╔══════════════════════════════════════════╗');
-    console.log('║  WA KICKER BOT v6.2.0 - NO-SPAM EDITION  ║');
-    console.log('║  FILE TOOLS - BISA DIAKSES SEMUA         ║');
-    console.log('║  FITUR WA   - PERLU LOGIN & AKSES        ║');
+    console.log('║  WA KICKER BOT v6.3.0                    ║');
+    console.log('║  NO-SPAM + XLSX SUPPORT                  ║');
     console.log('╚══════════════════════════════════════════╝\n');
     console.log(`📋 Admin IDs  : ${ADMIN_IDS.join(', ')}`);
     console.log(`📁 Data dir   : ${DATA_DIR}`);
     console.log(`📦 Max file   : ${MAX_FILE_SIZE_MB}MB`);
     console.log(`👥 Max kontak : ${MAX_CONTACTS_PER_FILE.toLocaleString()}/file`);
     console.log(`⏱️  DL timeout : ${DOWNLOAD_TIMEOUT_MS / 1000}s`);
-    console.log(`\n✨ PERBAIKAN: File collector sekarang TIDAK SPAM!`);
-    console.log(`   - Hanya 1 balasan untuk file pertama`);
-    console.log(`   - Ringkasan semua file ditampilkan saat /done\n`);
+    console.log(`\n✨ FITUR AKTIF:`);
+    console.log(`   - TXT → VCF (NO-SPAM)`);
+    console.log(`   - VCF → TXT (NO-SPAM)`);
+    console.log(`   - GABUNG TXT/VCF (NO-SPAM)`);
+    console.log(`   - XLSX → VCF: ${XLSX ? '✅ AKTIF' : '❌ TIDAK AKTIF (install xlsx)'}`);
+    console.log(`\n🚀 Bot siap digunakan!\n`);
 }).catch(err => {
     console.error('❌ Gagal launch bot:', err.message);
     process.exit(1);
