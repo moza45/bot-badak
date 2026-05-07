@@ -1084,11 +1084,7 @@ Ketik /refreshqr untuk coba lagi.`);
                 try { await sock.sendPresenceUpdate('available'); } catch (err) {}
                 startBackgroundActivitySpooler(sock, userId);
                 const kb = isAdmin(userId) ? KB_ADMIN_MAIN : KB_MAIN;
-                await safeReply(ctx, `✅ LOGIN WHATSAPP BERHASIL!\n\nMemuat daftar grup...`, { ...kb });
-                try {
-                    await new Promise(r => setTimeout(r, 1500));
-                    await showGroupPicker(ctx, userId, session);
-                } catch (_) {}
+                await safeReply(ctx, `✅ LOGIN WHATSAPP BERHASIL!\n\nPilih menu di keyboard bawah.`, { ...kb });
             }
         });
         sock.ev.on('creds.update', () => { saveCreds(); });
@@ -1786,15 +1782,24 @@ tgBot.action('do_kick', async (ctx) => {
     if (!session || !session.loggedIn) return safeReply(ctx, '❌ Session expired.');
     if (!selected || selected.size === 0) return safeReply(ctx, '⚠️ Belum ada yang dipilih!');
     const jidList = Array.from(selected);
-    const kickAnim = await liveKickProgress(ctx, jidList.length);
-    const kickResult = await naturalKickOneByOne(session.sock, session.groupId, jidList, (progress) => { kickAnim.update(progress); });
     kickSelections.set(userId, new Set());
-    const totalKicked = kickResult.kicked;
-    if (kickResult.stopped && kickResult.reason === 'connection') {
-        await kickAnim.stop(`🔴 Koneksi WA terputus!\n\n🦵 ${totalKicked} dari ${jidList.length} berhasil dikick.\nTekan 🔑 Login untuk reconnect.`);
-    } else {
-        await kickAnim.stop(`✅ Kick Selesai\!\n\n🦵 ${totalKicked} dari ${jidList.length} anggota berhasil dikick\.\n🎯 Grup: ${esc(session.groupName || 'N/A')}`);
-    }
+
+    // Jalankan kick di background — tidak await di handler agar tidak timeout Telegraf (90 detik)
+    const kickAnim = await liveKickProgress(ctx, jidList.length);
+    setImmediate(async () => {
+        try {
+            const kickResult = await naturalKickOneByOne(session.sock, session.groupId, jidList, (progress) => { kickAnim.update(progress); });
+            const totalKicked = kickResult.kicked;
+            if (kickResult.stopped && kickResult.reason === 'connection') {
+                await kickAnim.stop(`🔴 Koneksi WA terputus!\n\n🦵 ${totalKicked} dari ${jidList.length} berhasil dikick.\nTekan 🔑 Login untuk reconnect.`);
+            } else {
+                await kickAnim.stop(`✅ Kick Selesai!\n\n🦵 ${totalKicked} dari ${jidList.length} anggota berhasil dikick.\n🎯 Grup: ${esc(session.groupName || 'N/A')}`);
+            }
+        } catch (err) {
+            log('ERROR', 'Kick', `Error proses kick background: ${err.message}`, err);
+            try { await kickAnim.stop(`❌ Kick berhenti karena error: ${esc(err.message)}`); } catch (_) {}
+        }
+    });
 });
 
 tgBot.action('cancel_kick', async (ctx) => {
