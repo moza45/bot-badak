@@ -13,8 +13,8 @@ const path = require('path');
 const crypto = require('crypto');
 const http = require('http');
 // ╔══════════════════════════════════════════════════════════════╗
-// ║         W A - K I C K E R   B O T   v 5 . 1 . 0            ║
-// ║      G O D M O D E   E D I T I O N   (FULL FIXED)          ║
+// ║         W A - K I C K E R   B O T   v 2 . 0 . 0            ║
+// ║      G O D M O D E   E D I T I O N                         ║
 // ╚══════════════════════════════════════════════════════════════╝
 
 // ========== KONFIGURASI AWAL ==========
@@ -1101,7 +1101,7 @@ const KB_PRE_LOGIN = {
 };
 const KB_MAIN = {
     reply_markup: {
-        keyboard: [[{ text: '📋 Daftar Grup' }, { text: '🎯 Pilih Grup' }], [{ text: '➕ Buat Grup WA' }], [{ text: '🔴 Kick Menu' }, { text: '📡 Status' }], [{ text: '🚪 Logout WhatsApp' }]],
+        keyboard: [[{ text: '📋 Daftar Grup' }], [{ text: '📡 Status' }], [{ text: '🚪 Logout WhatsApp' }]],
         resize_keyboard: true, one_time_keyboard: false
     }
 };
@@ -1113,7 +1113,7 @@ const KB_ADMIN_PRE = {
 };
 const KB_ADMIN_MAIN = {
     reply_markup: {
-        keyboard: [[{ text: '📋 Daftar Grup' }, { text: '🎯 Pilih Grup' }], [{ text: '➕ Buat Grup WA' }], [{ text: '🔴 Kick Menu' }, { text: '📡 Status' }], [{ text: '📋 Pending Payment' }, { text: '👥 User List' }], [{ text: '🚪 Logout WhatsApp' }]],
+        keyboard: [[{ text: '📋 Daftar Grup' }], [{ text: '📡 Status' }], [{ text: '📋 Pending Payment' }, { text: '👥 User List' }], [{ text: '🚪 Logout WhatsApp' }]],
         resize_keyboard: true, one_time_keyboard: false
     }
 };
@@ -1204,7 +1204,7 @@ async function showKickMenu(ctx, userId, session) {
         await fetchAnim.stop(null);
         let infoText = '';
         // unlimited — semua anggota ditampilkan
-        await safeReply(ctx, `╔${DIVIDER}╗\n║  MENU KICK ANGGOTA\n╚${DIVIDER}╝\n\n🎯 Grup: ${esc(session.groupName || '')}\n👥 Non-admin: ${members.length} orang${infoText}\n\nKetuk nama untuk pilih/batal.\nTekan Kick Terpilih jika sudah siap.\n\n⚠️ _Aksi kick tidak bisa dibatalkan!_`, { ...buildMemberKeyboard(members, kickSelections.get(userId)) });
+        await safeReply(ctx, `╔${DIVIDER}╗\n║  KICK ANGGOTA\n╚${DIVIDER}╝\n\n🎯 Grup: ${esc(session.groupName || '')}\n👥 Non-admin: ${members.length} orang${infoText}\n\nKetuk nama untuk pilih/batal.\nTekan Kick Terpilih jika sudah siap.\n\n⚠️ _Aksi kick tidak bisa dibatalkan!_`, { ...buildMemberKeyboard(members, kickSelections.get(userId)) });
     } catch (err) {
         await fetchAnim.stop(`❌ Error: ${esc(err.message)}`);
     }
@@ -1386,7 +1386,8 @@ tgBot.command('select', requireAccess, async (ctx) => {
             if (!target) return safeReply(ctx, `❌ Grup "${groupName}" tidak ditemukan.`);
             session.groupId = target.id;
             session.groupName = target.subject;
-            await safeReply(ctx, `✅ Grup terpilih!\n🎯 ${esc(target.subject)}\n👥 ${target.participants?.length || 0} anggota\n\nTekan 🔴 Kick Menu untuk mulai.`);
+            await safeReply(ctx, `✅ Grup terpilih!\n🎯 ${esc(target.subject)}\n👥 ${target.participants?.length || 0} anggota\n\n⏳ Memuat daftar anggota...`);
+            await showKickMenu(ctx, userId, session);
         } catch (err) {
             await safeReply(ctx, `❌ Error: ${esc(err.message)}`);
         }
@@ -1401,29 +1402,6 @@ tgBot.command('kickmenu', requireAccess, async (ctx) => {
     if (!session || !session.loggedIn) return safeReply(ctx, '❌ *Login dulu!*');
     if (!session.groupId) return safeReply(ctx, '❌ *Pilih grup dulu!*');
     await showKickMenu(ctx, userId, session);
-});
-
-tgBot.command('buatgrup', requireAccess, async (ctx) => {
-    const userId = ctx.from.id;
-    const session = userSessions.get(userId);
-    if (!session || !session.loggedIn) return safeReply(ctx, '❌ *Login dulu!*');
-    const namaGrup = ctx.message.text.replace('/buatgrup', '').trim().replace(/^["']|["']$/g, '');
-    if (!namaGrup) return safeReply(ctx, 'Format: /buatgrup "Nama Grup"');
-    if (namaGrup.length > 100) return safeReply(ctx, `❌ Nama grup terlalu panjang (${namaGrup.length} karakter). Maks 100 karakter.`);
-    await safeReply(ctx, `⏳ *Membuat grup "${namaGrup}"...*`);
-    try {
-        const result = await session.sock.groupCreate(namaGrup, []);
-        session.groupId = result.id;
-        session.groupName = namaGrup;
-        let inviteLink = '-';
-        try {
-            const code = await session.sock.groupInviteCode(result.id);
-            inviteLink = `https://chat.whatsapp.com/${code}`;
-        } catch (err) {}
-        await safeReply(ctx, `✅ Grup berhasil dibuat!\n\n${namaGrup}\n🔗 ${inviteLink}\n\nTekan 🔴 Kick Menu untuk mulai.`);
-    } catch (err) {
-        await safeReply(ctx, `❌ Gagal: ${esc(err.message)}`);
-    }
 });
 
 tgBot.command('status', requireAccess, async (ctx) => {
@@ -1463,12 +1441,12 @@ function getHelpText(contact) {
         "2. Login WhatsApp",
         "   Tekan Login WhatsApp lalu scan QR di WA kamu",
         "",
-        "3. Pilih Grup",
-        "   Tekan Daftar Grup atau Pilih Grup",
-        "   Ketuk nama grup dari daftar",
+        "3. Pilih Grup & Kick Anggota",
+        "   Tekan Daftar Grup, ketuk nama grup",
+        "   Menu Kick Anggota langsung muncul otomatis",
         "",
         "4. Kick Anggota",
-        "   Tekan Kick Menu, centang anggota, tekan Kick",
+        "   Centang anggota yang ingin dikick, tekan Kick Terpilih",
         "",
         "PENTING:",
         "- Bot hanya bisa kick jika kamu admin grup",
@@ -1634,22 +1612,11 @@ tgBot.hears('📋 Daftar Grup', requireAccess, async (ctx) => {
     await showGroupPicker(ctx, userId, session);
 });
 
-tgBot.hears('🎯 Pilih Grup', requireAccess, async (ctx) => {
+tgBot.hears('🦵 Kick Anggota', requireAccess, async (ctx) => {
     const userId = ctx.from.id;
     const session = userSessions.get(userId);
     if (!session || !session.loggedIn) return safeReply(ctx, '❌ Login dulu!');
-    await showGroupPicker(ctx, userId, session);
-});
-
-tgBot.hears('➕ Buat Grup WA', requireAccess, async (ctx) => {
-    await safeReply(ctx, `Format: /buatgrup "Nama Grup"\n\nContoh: /buatgrup "Arisan RT 05"`);
-});
-
-tgBot.hears('🔴 Kick Menu', requireAccess, async (ctx) => {
-    const userId = ctx.from.id;
-    const session = userSessions.get(userId);
-    if (!session || !session.loggedIn) return safeReply(ctx, '❌ Login dulu!');
-    if (!session.groupId) return safeReply(ctx, '❌ Pilih grup dulu!');
+    if (!session.groupId) return safeReply(ctx, '❌ Pilih grup dulu dari menu Daftar Grup!');
     await showKickMenu(ctx, userId, session);
 });
 
@@ -1753,8 +1720,8 @@ tgBot.action(/^selectgrp_(\d+|cancel)$/, requireAccess, async (ctx) => {
     session.groupId = target.id;
     session.groupName = target.subject;
     session._groupPickerList = null;
-    const memberCount = target.participants?.length || 0;
-    await ctx.editMessageText(`✅ Grup terpilih!\n\n🎯 ${esc(target.subject)}\n👥 ${memberCount} anggota\n\nTekan 🔴 Kick Menu untuk mulai.`);
+    await ctx.editMessageText(`✅ Grup terpilih!\n\n🎯 ${esc(target.subject)}\n👥 ${target.participants?.length || 0} anggota\n\n⏳ Memuat daftar anggota...`);
+    await showKickMenu(ctx, userId, session);
 });
 
 tgBot.action(/^toggle_(.+)$/, async (ctx) => {
@@ -1901,7 +1868,7 @@ async function runStartupAuthCheck() {
 tgBot.launch().then(async () => {
     await runStartupAuthCheck();
     console.log('\n╔══════════════════════════════════════════════════════════════╗');
-    console.log('║          W A - K I C K E R   B O T   v 5 . 1 . 0            ║');
+    console.log('║          W A - K I C K E R   B O T   v 2 . 0 . 0            ║');
     console.log('║        G O D M O D E   E D I T I O N   (FULL FIXED)         ║');
     console.log('╠══════════════════════════════════════════════════════════════╣');
     console.log(`║  Admin IDs      : ${ADMIN_IDS.join(', ')}`);
