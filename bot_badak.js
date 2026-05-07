@@ -584,7 +584,7 @@ async function requireAccess(ctx, next) {
 // --- 1. TXT to VCF (Multiple) ---
 async function handleCvTxtToVcfStart(ctx, userId) {
     setState(userId, { mode: 'cv_txt_to_vcf', files: [], fileNames: [], collecting: true });
-    await safeReply(ctx, `🔄 *TXT → VCF (Multiple)*\n\nSilakan kirim file .txt satu per satu.\nSetiap file akan dikonversi menjadi file .vcf terpisah.\n\nKetik /done jika sudah selesai.\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `📥 *Mengumpulkan file TXT...*\n\nKirim file lain atau ketik /done`);
 }
 
 async function handleCvTxtToVcfFile(ctx, userId, state, doc) {
@@ -599,16 +599,10 @@ async function handleCvTxtToVcfFile(ctx, userId, state, doc) {
         const buffer      = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
         const textContent = buffer.toString('utf-8');
         state.files.push({ name: fname, content: textContent });
+        state.fileNames = state.fileNames || [];
         state.fileNames.push(fname);
         setState(userId, state);
-        
-        // Hanya kirim balasan untuk file PERTAMA
-        if (state.files.length === 1) {
-            await safeReply(ctx, `📥 *Mengumpulkan file TXT...*\n\nFile pertama: ${fname}\nKirim file lain atau ketik /done`);
-        } else {
-            // Tidak kirim balasan untuk file ke-2,3,4,dst
-            log('INFO', 'TxtToVcf', `File ke-${state.files.length}: ${fname} diterima (silent)`);
-        }
+        // TIDAK ADA BALASAN - DIAM
     } catch (err) {
         log('ERROR', 'CvTxtToVcf', err.message, err);
         await safeReply(ctx, `❌ Error membaca file: ${err.message}`);
@@ -621,7 +615,7 @@ async function finalizeCvTxtToVcf(ctx, userId, state) {
         return safeReply(ctx, '❌ Tidak ada file yang dikumpulkan.');
     }
     try {
-        // Kirim ringkasan file yang diterima
+        // TAMPILKAN RINGKASAN FILE
         const fileList = state.fileNames.map((f, i) => `${i+1}. ${f}`).join('\n');
         await safeReply(ctx, `📥 *${state.files.length} file diterima:*\n\n${fileList}\n\n${'─'.repeat(30)}\n⏳ Memproses konversi...`);
         
@@ -642,7 +636,6 @@ async function finalizeCvTxtToVcf(ctx, userId, state) {
         clearState(userId);
     }
 }
-
 // --- 2. VCF to TXT (Multiple) ---
 async function handleCvVcfToTxtStart(ctx, userId) {
     setState(userId, { mode: 'cv_vcf_to_txt', files: [], fileNames: [], collecting: true });
