@@ -14,8 +14,8 @@ const crypto = require('crypto');
 const http = require('http');
 
 // ╔══════════════════════════════════════════════════════════════╗
-// ║         W A - K I C K E R   B O T   v 6 . 1 . 0            ║
-// ║           B U G F I X   E D I T I O N                       ║
+// ║         W A - K I C K E R   B O T   v 6 . 2 . 0            ║
+// ║           NO-SPAM FILE COLLECTOR EDITION                    ║
 // ╚══════════════════════════════════════════════════════════════╝
 
 // ========== KONFIGURASI AWAL ==========
@@ -42,18 +42,14 @@ const PAYMENT_BANK_HOLDER  = process.env.PAYMENT_BANK_HOLDER || 'Bot Owner';
 const PAYMENT_DANA         = process.env.PAYMENT_DANA        || '081234567890';
 const PAYMENT_CONTACT      = process.env.PAYMENT_CONTACT     || '@adminusername';
 const TRIAL_DURATION_HOURS = parseInt(process.env.TRIAL_DURATION_HOURS || '24');
-// FIX: Health API key harus statis dari .env agar tidak berubah saat restart
 const HEALTH_API_KEY       = process.env.HEALTH_API_KEY || (() => {
     console.warn('⚠️  HEALTH_API_KEY tidak diset di .env — monitoring eksternal akan terputus setiap restart!');
     return crypto.randomBytes(16).toString('hex');
 })();
 const MAX_FILE_SIZE_MB     = parseInt(process.env.MAX_FILE_SIZE_MB || '10');
 const MAX_FILES_PER_BATCH  = parseInt(process.env.MAX_FILES_PER_BATCH || '20');
-// FIX: Batas kontak per VCF agar tidak OOM
 const MAX_CONTACTS_PER_FILE = parseInt(process.env.MAX_CONTACTS_PER_FILE || '50000');
-// FIX: Batas total file di admin dir
 const MAX_ADMIN_FILES      = parseInt(process.env.MAX_ADMIN_FILES || '100');
-// FIX: Download timeout
 const DOWNLOAD_TIMEOUT_MS  = parseInt(process.env.DOWNLOAD_TIMEOUT_MS || '30000');
 
 // ========== PERSISTENT STORAGE ==========
@@ -69,14 +65,12 @@ if (!fs.existsSync(ADMIN_FILES_DIR)) fs.mkdirSync(ADMIN_FILES_DIR, { recursive: 
 const TEMP_DIR = path.join(DATA_DIR, 'temp');
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
-// Try to load XLSX
 let XLSX = null;
 try {
     XLSX = require('xlsx');
     console.log('✅ xlsx package loaded successfully');
 } catch (e) {
     console.log('⚠️  xlsx package tidak terinstall. Fitur /cv_xlsx_to_vcf tidak akan berfungsi.');
-    console.log('   Install dengan: npm install xlsx');
 }
 
 // ========== DATABASE JSON ==========
@@ -114,7 +108,6 @@ class UserDatabase {
         return this.users[String(userId)] || null;
     }
 
-    // FIX: bungkus writeJSON dengan try/catch agar tidak crash proses
     saveUser(user) {
         this.users[String(user.id)] = {
             ...user,
@@ -177,7 +170,6 @@ class UserDatabase {
 }
 const db = new UserDatabase();
 
-// ========== LOGGER SEDERHANA ==========
 function log(level, module, message, error = null) {
     const timestamp = new Date().toISOString();
     const prefix = level === 'ERROR' ? '❌' : level === 'WARN' ? '⚠️' : '📘';
@@ -190,12 +182,10 @@ const tgBot = new Telegraf(TELEGRAM_BOT_TOKEN);
 const userStates    = new Map();
 const userSessions  = new Map();
 const kickSelections = new Map();
-// FIX: loginLocks sekarang benar-benar digunakan untuk prevent concurrent login
 const loginLocks    = new Map();
 const vcfPending    = new Map();
 
-// ========== RATE LIMITER — DIPASANG PALING AWAL ==========
-// FIX: Rate limiter dipindah ke atas sebelum semua handler didaftarkan
+// ========== RATE LIMITER ==========
 const rateLimitMap = new Map();
 const RATE_LIMIT_WINDOW_MS = 5000;
 const RATE_LIMIT_MAX       = 10;
@@ -213,7 +203,6 @@ function isRateLimited(userId) {
     return entry.count > RATE_LIMIT_MAX;
 }
 
-// Rate limiter middleware — didaftarkan PERTAMA sebelum handler lain
 tgBot.use(async (ctx, next) => {
     const userId = ctx.from?.id;
     if (userId && isRateLimited(userId)) {
@@ -290,20 +279,17 @@ function isPhoneNumber(val) {
     return /^(\+?62|0)[0-9]{8,13}$/.test(str) || /^[0-9]{10,15}$/.test(str);
 }
 
-// FIX: safeFilename sekarang juga buang path traversal via path.basename
 function safeFilename(name) {
-    const base = path.basename(name);          // hilangkan direktori
+    const base = path.basename(name);
     return base.replace(/[\/\\:*?"<>|]/g, '_').substring(0, 100);
 }
 
-// ========== SAFE REPLY ==========
 async function safeReply(ctx, text, opts = {}) {
     try {
         return await ctx.reply(text, opts);
     } catch (err) {
         log('WARN', 'SafeReply', `Gagal kirim pesan (attempt 1): ${err.message}`);
         try {
-            // FIX: log juga error attempt ke-2, tidak ditelan diam-diam
             return await ctx.reply(text.replace(/[*_`[\]()~>#+=|{}.!\\-]/g, ''), opts);
         } catch (err2) {
             log('WARN', 'SafeReply', `Gagal kirim pesan (attempt 2): ${err2.message}`);
@@ -311,11 +297,7 @@ async function safeReply(ctx, text, opts = {}) {
     }
 }
 
-// ========== UTILITAS FILE ==========
-
-// FIX: downloadTelegramFile dengan timeout via AbortController
 async function downloadTelegramFile(ctx, fileId, fileSizeMB = null) {
-    // Cek ukuran sebelum download jika info tersedia
     if (fileSizeMB !== null && fileSizeMB > MAX_FILE_SIZE_MB) {
         throw new Error(`File terlalu besar. Maks ${MAX_FILE_SIZE_MB}MB.`);
     }
@@ -327,10 +309,7 @@ async function downloadTelegramFile(ctx, fileId, fileSizeMB = null) {
     try {
         const resp = await fetch(fileLink.href, { signal: controller.signal });
         if (!resp.ok) throw new Error(`HTTP ${resp.status} saat download file`);
-
         const buffer = Buffer.from(await resp.arrayBuffer());
-
-        // FIX: Validasi ukuran setelah download juga (double-check)
         if (buffer.length > MAX_FILE_SIZE_MB * 1024 * 1024) {
             throw new Error(`File terlalu besar. Maks ${MAX_FILE_SIZE_MB}MB.`);
         }
@@ -345,7 +324,6 @@ async function downloadTelegramFile(ctx, fileId, fileSizeMB = null) {
     }
 }
 
-// Helper: hitung ukuran file dalam MB dari bytes
 function bytesToMB(bytes) {
     return bytes ? bytes / (1024 * 1024) : null;
 }
@@ -376,7 +354,6 @@ function parseVCF(vcfText) {
     const seen     = new Set();
     const blocks   = vcfText.split(/END:VCARD/i).map(b => b.trim()).filter(Boolean);
 
-    // FIX: Batas kontak per file agar tidak OOM
     for (const block of blocks) {
         if (contacts.length >= MAX_CONTACTS_PER_FILE) {
             log('WARN', 'parseVCF', `Batas ${MAX_CONTACTS_PER_FILE} kontak tercapai, sisanya dilewati.`);
@@ -404,23 +381,18 @@ function autoDetectAndParse(line) {
     line = line.trim();
     if (!line) return null;
 
-    // Format: nomor di depan
     const navyMatch = line.match(/^(\+?[0-9]{10,15})\s+(.+)$/);
     if (navyMatch) return { phone: navyMatch[1], name: navyMatch[2].trim() };
 
-    // Format: nama|nomor atau nama,nomor
     const sepMatch = line.match(/^(.+?)[,|]\s*(\+?[0-9]{8,15})$/);
     if (sepMatch) return { phone: sepMatch[2], name: sepMatch[1].trim() };
 
-    // Format: nomor|nama atau nomor,nama
     const sepMatch2 = line.match(/^(\+?[0-9]{8,15})[,|]\s*(.+)$/);
     if (sepMatch2) return { phone: sepMatch2[1], name: sepMatch2[2].trim() };
 
-    // Hanya nomor
     const phoneOnly = line.match(/^(\+?[0-9]{10,15})$/);
     if (phoneOnly) return { phone: phoneOnly[1], name: `Kontak ${phoneOnly[1]}` };
 
-    // Tab-separated
     const tabMatch = line.match(/^(.+?)\t(\+?[0-9]{8,15})$/);
     if (tabMatch) {
         const a = tabMatch[1].trim();
@@ -439,14 +411,12 @@ function parseTxtLines(text) {
     const seen     = new Set();
 
     for (const line of lines) {
-        // FIX: Batas kontak per file
         if (contacts.length >= MAX_CONTACTS_PER_FILE) {
             log('WARN', 'parseTxtLines', `Batas ${MAX_CONTACTS_PER_FILE} kontak tercapai.`);
             break;
         }
         const parsed = autoDetectAndParse(line);
         if (!parsed) continue;
-        // FIX: normalisasi dilakukan di sini secara konsisten
         const norm = normalizePhone(parsed.phone);
         if (!norm || seen.has(norm)) continue;
         seen.add(norm);
@@ -456,7 +426,6 @@ function parseTxtLines(text) {
 }
 
 // ========== STATE MANAGEMENT ==========
-// FIX: TTL diperpanjang jadi 30 menit untuk akomodasi batch file besar
 const STATE_TTL_MS = 30 * 60 * 1000;
 
 function setState(userId, data) {
@@ -477,8 +446,6 @@ function clearState(userId) {
     userStates.delete(userId);
 }
 
-// Cleanup expired states, vcfPending, kickSelections, loginLocks setiap 10 menit
-// FIX: vcfPending dan kickSelections sekarang juga dibersihkan
 setInterval(() => {
     const now = Date.now();
 
@@ -488,28 +455,24 @@ setInterval(() => {
         }
     }
 
-    // FIX: cleanup vcfPending dengan TTL 15 menit
     for (const [uid, pending] of vcfPending.entries()) {
         if (pending.createdAt && now - pending.createdAt > 15 * 60 * 1000) {
             vcfPending.delete(uid);
         }
     }
 
-    // FIX: cleanup kickSelections dengan TTL 30 menit
     for (const [uid, sel] of kickSelections.entries()) {
         if (sel.createdAt && now - sel.createdAt > 30 * 60 * 1000) {
             kickSelections.delete(uid);
         }
     }
 
-    // FIX: cleanup loginLocks yang mungkin tertinggal
     for (const [uid, lockTime] of loginLocks.entries()) {
         if (now - lockTime > 5 * 60 * 1000) {
             loginLocks.delete(uid);
         }
     }
 
-    // Cleanup rate limit
     for (const [uid, entry] of rateLimitMap.entries()) {
         if (now > entry.resetAt + 60000) rateLimitMap.delete(uid);
     }
@@ -601,7 +564,6 @@ async function getKeyboard(userId) {
     return KB_LANDING;
 }
 
-// ========== MIDDLEWARE AKSES WA ==========
 async function requireAccess(ctx, next) {
     const userId = ctx.from?.id;
     if (!userId) return;
@@ -617,11 +579,11 @@ async function requireAccess(ctx, next) {
     await safeReply(ctx, `╔══════════════════════╗\n║  AKSES DITOLAK\n╚══════════════════════╝\n\nBot ini berbayar.\n\n🎁 Coba gratis ${TRIAL_DURATION_HOURS} jam\n💳 Atau langsung beli paket`, { ...KB_LANDING });
 }
 
-// ========== FILE HANDLERS ==========
+// ========== FILE HANDLERS (NO-SPAM VERSION) ==========
 
 // --- 1. TXT to VCF (Multiple) ---
 async function handleCvTxtToVcfStart(ctx, userId) {
-    setState(userId, { mode: 'cv_txt_to_vcf', files: [], collecting: true });
+    setState(userId, { mode: 'cv_txt_to_vcf', files: [], fileNames: [], collecting: true });
     await safeReply(ctx, `🔄 *TXT → VCF (Multiple)*\n\nSilakan kirim file .txt satu per satu.\nSetiap file akan dikonversi menjadi file .vcf terpisah.\n\nKetik /done jika sudah selesai.\nKetik /batal untuk membatalkan.`);
 }
 
@@ -634,12 +596,19 @@ async function handleCvTxtToVcfFile(ctx, userId, state, doc) {
         return safeReply(ctx, `❌ Maksimal ${MAX_FILES_PER_BATCH} file per batch.`);
     }
     try {
-        // FIX: teruskan ukuran file ke downloader
         const buffer      = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
         const textContent = buffer.toString('utf-8');
         state.files.push({ name: fname, content: textContent });
+        state.fileNames.push(fname);
         setState(userId, state);
-        await safeReply(ctx, `✅ File ke-${state.files.length}: ${fname} diterima.\n\nKetik /done untuk proses semua.`);
+        
+        // Hanya kirim balasan untuk file PERTAMA
+        if (state.files.length === 1) {
+            await safeReply(ctx, `📥 *Mengumpulkan file TXT...*\n\nFile pertama: ${fname}\nKirim file lain atau ketik /done`);
+        } else {
+            // Tidak kirim balasan untuk file ke-2,3,4,dst
+            log('INFO', 'TxtToVcf', `File ke-${state.files.length}: ${fname} diterima (silent)`);
+        }
     } catch (err) {
         log('ERROR', 'CvTxtToVcf', err.message, err);
         await safeReply(ctx, `❌ Error membaca file: ${err.message}`);
@@ -652,6 +621,10 @@ async function finalizeCvTxtToVcf(ctx, userId, state) {
         return safeReply(ctx, '❌ Tidak ada file yang dikumpulkan.');
     }
     try {
+        // Kirim ringkasan file yang diterima
+        const fileList = state.fileNames.map((f, i) => `${i+1}. ${f}`).join('\n');
+        await safeReply(ctx, `📥 *${state.files.length} file diterima:*\n\n${fileList}\n\n${'─'.repeat(30)}\n⏳ Memproses konversi...`);
+        
         const results = [];
         for (const file of state.files) {
             const contacts    = parseTxtLines(file.content);
@@ -672,7 +645,7 @@ async function finalizeCvTxtToVcf(ctx, userId, state) {
 
 // --- 2. VCF to TXT (Multiple) ---
 async function handleCvVcfToTxtStart(ctx, userId) {
-    setState(userId, { mode: 'cv_vcf_to_txt', files: [], collecting: true });
+    setState(userId, { mode: 'cv_vcf_to_txt', files: [], fileNames: [], collecting: true });
     await safeReply(ctx, `🔄 *VCF → TXT (Multiple)*\n\nSilakan kirim file .vcf satu per satu.\nSetiap file akan dikonversi menjadi file .txt terpisah.\n\nKetik /done jika sudah selesai.\nKetik /batal untuk membatalkan.`);
 }
 
@@ -681,12 +654,21 @@ async function handleCvVcfToTxtFile(ctx, userId, state, doc) {
     if (!fname.toLowerCase().endsWith('.vcf')) {
         return safeReply(ctx, '⚠️ Hanya file .vcf yang diterima.');
     }
+    if (state.files.length >= MAX_FILES_PER_BATCH) {
+        return safeReply(ctx, `❌ Maksimal ${MAX_FILES_PER_BATCH} file per batch.`);
+    }
     try {
         const buffer  = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
         const vcfText = buffer.toString('utf-8');
         state.files.push({ name: fname, content: vcfText });
+        state.fileNames.push(fname);
         setState(userId, state);
-        await safeReply(ctx, `✅ File ke-${state.files.length}: ${fname} diterima.\n\nKetik /done untuk proses semua.`);
+        
+        if (state.files.length === 1) {
+            await safeReply(ctx, `📥 *Mengumpulkan file VCF...*\n\nFile pertama: ${fname}\nKirim file lain atau ketik /done`);
+        } else {
+            log('INFO', 'VcfToTxt', `File ke-${state.files.length}: ${fname} diterima (silent)`);
+        }
     } catch (err) {
         log('ERROR', 'CvVcfToTxt', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
@@ -699,6 +681,9 @@ async function finalizeCvVcfToTxt(ctx, userId, state) {
         return safeReply(ctx, '❌ Tidak ada file yang dikumpulkan.');
     }
     try {
+        const fileList = state.fileNames.map((f, i) => `${i+1}. ${f}`).join('\n');
+        await safeReply(ctx, `📥 *${state.files.length} file diterima:*\n\n${fileList}\n\n${'─'.repeat(30)}\n⏳ Memproses konversi...`);
+        
         const results = [];
         for (const file of state.files) {
             const contacts   = parseVCF(file.content);
@@ -809,9 +794,9 @@ async function handleTxt2VcfFile(ctx, userId, state, doc) {
     }
 }
 
-// --- 5. Gabung TXT ---
+// --- 5. Gabung TXT (NO-SPAM) ---
 async function handleGabungTxtStart(ctx, userId) {
-    setState(userId, { mode: 'gabungtxt', files: [], collecting: true });
+    setState(userId, { mode: 'gabungtxt', files: [], fileNames: [], collecting: true });
     await safeReply(ctx, `🔗 *GABUNG TXT*\n\nSilakan kirim file .txt satu per satu (minimal 2).\nSemua file akan digabung menjadi satu file .txt.\n\nKetik /done jika sudah selesai.`);
 }
 
@@ -827,8 +812,14 @@ async function handleGabungTxtFile(ctx, userId, state, doc) {
         const buffer      = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
         const textContent = buffer.toString('utf-8');
         state.files.push({ name: fname, content: textContent });
+        state.fileNames.push(fname);
         setState(userId, state);
-        await safeReply(ctx, `✅ File ke-${state.files.length}: ${fname} diterima.\n\nKetik /done untuk gabungkan semua.`);
+        
+        if (state.files.length === 1) {
+            await safeReply(ctx, `📥 *Mengumpulkan file TXT...*\n\nFile pertama: ${fname}\nKirim file lain atau ketik /done`);
+        } else {
+            log('INFO', 'GabungTxt', `File ke-${state.files.length}: ${fname} diterima (silent)`);
+        }
     } catch (err) {
         log('ERROR', 'GabungTxt', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
@@ -841,6 +832,9 @@ async function finalizeGabungTxt(ctx, userId, state) {
         return safeReply(ctx, '❌ Minimal 2 file untuk digabung.');
     }
     try {
+        const fileList = state.fileNames.map((f, i) => `${i+1}. ${f}`).join('\n');
+        await safeReply(ctx, `📥 *${state.files.length} file diterima:*\n\n${fileList}\n\n${'─'.repeat(30)}\n⏳ Memproses penggabungan...`);
+        
         const allLines = [];
         let totalLines = 0;
         for (const file of state.files) {
@@ -872,9 +866,9 @@ async function finalizeGabungTxt(ctx, userId, state) {
     }
 }
 
-// --- 6. Gabung VCF ---
+// --- 6. Gabung VCF (NO-SPAM) ---
 async function handleGabungVcfStart(ctx, userId) {
-    setState(userId, { mode: 'gabungvcf', files: [], collecting: true });
+    setState(userId, { mode: 'gabungvcf', files: [], fileNames: [], collecting: true });
     await safeReply(ctx, `🔗 *GABUNG VCF*\n\nSilakan kirim file .vcf satu per satu (minimal 2).\nSemua file akan digabung menjadi satu file .vcf.\n\nKetik /done jika sudah selesai.`);
 }
 
@@ -890,8 +884,14 @@ async function handleGabungVcfFile(ctx, userId, state, doc) {
         const buffer  = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
         const vcfText = buffer.toString('utf-8');
         state.files.push({ name: fname, content: vcfText });
+        state.fileNames.push(fname);
         setState(userId, state);
-        await safeReply(ctx, `✅ File ke-${state.files.length}: ${fname} diterima.\n\nKetik /done untuk gabungkan semua.`);
+        
+        if (state.files.length === 1) {
+            await safeReply(ctx, `📥 *Mengumpulkan file VCF...*\n\nFile pertama: ${fname}\nKirim file lain atau ketik /done`);
+        } else {
+            log('INFO', 'GabungVcf', `File ke-${state.files.length}: ${fname} diterima (silent)`);
+        }
     } catch (err) {
         log('ERROR', 'GabungVcf', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
@@ -904,6 +904,9 @@ async function finalizeGabungVcf(ctx, userId, state) {
         return safeReply(ctx, '❌ Minimal 2 file untuk digabung.');
     }
     try {
+        const fileList = state.fileNames.map((f, i) => `${i+1}. ${f}`).join('\n');
+        await safeReply(ctx, `📥 *${state.files.length} file diterima:*\n\n${fileList}\n\n${'─'.repeat(30)}\n⏳ Memproses penggabungan...`);
+        
         const allContacts = [];
         const seen        = new Set();
         let totalContacts = 0;
@@ -1223,10 +1226,8 @@ async function handleAdminFileUpload(ctx, userId) {
 }
 
 async function handleAdminFileUploadFile(ctx, userId, state, doc) {
-    // FIX: safeFilename sekarang sudah include path.basename()
     const fname = safeFilename(doc.file_name || 'unnamed_file');
 
-    // FIX: Cek batas jumlah file admin
     try {
         const existingFiles = fs.readdirSync(ADMIN_FILES_DIR);
         if (existingFiles.length >= MAX_ADMIN_FILES) {
@@ -1238,11 +1239,9 @@ async function handleAdminFileUploadFile(ctx, userId, state, doc) {
     }
 
     try {
-        // FIX: Cek ukuran sebelum download
         const buffer   = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
         let finalPath  = path.join(ADMIN_FILES_DIR, fname);
 
-        // Hindari overwrite: jika sudah ada, tambahkan timestamp
         if (fs.existsSync(finalPath)) {
             const base    = path.parse(fname).name;
             const ext     = path.parse(fname).ext;
@@ -1262,8 +1261,7 @@ async function handleAdminFileUploadFile(ctx, userId, state, doc) {
     }
 }
 
-// ========== HANDLER LISTGC (REFACTORED) ==========
-// FIX: Fungsi deduplikasi — dulu kode ini copy-paste di dua tempat
+// ========== HANDLER LISTGC ==========
 async function handleListGc(ctx) {
     const userId = ctx.from.id;
 
@@ -1313,7 +1311,6 @@ tgBot.use(async (ctx, next) => {
     const state = getState(userId);
     if (!state) return next();
 
-    // Handler addctc — input kontak tambahan
     if (state.mode === 'addctc' && state.phase === 'waiting_contacts') {
         const input            = ctx.message.text.trim();
         const existingContacts = state.existingContacts;
@@ -1348,7 +1345,6 @@ tgBot.use(async (ctx, next) => {
         return;
     }
 
-    // Handler delctc — input nomor urut
     if (state.mode === 'delctc' && state.phase === 'waiting_input') {
         const input    = ctx.message.text.trim();
         const contacts = state.contacts;
@@ -1391,7 +1387,6 @@ tgBot.use(async (ctx, next) => {
         return;
     }
 
-    // Handler totxt — kumpulkan pesan
     if (state.mode === 'totxt' && state.active) {
         const cmd = ctx.message?.text?.startsWith('/');
         if (cmd) {
@@ -1408,7 +1403,6 @@ tgBot.use(async (ctx, next) => {
         return;
     }
 
-    // Handler renamectc — prefix/suffix/numbered
     if (state.mode === 'renamectc') {
         const input    = ctx.message.text.trim();
         const contacts = state.contacts;
@@ -1462,7 +1456,7 @@ tgBot.use(async (ctx, next) => {
     return next();
 });
 
-// ========== DOCUMENT HANDLER TERPUSAT ==========
+// ========== DOCUMENT HANDLER ==========
 tgBot.on('document', async (ctx) => {
     const userId = ctx.from.id;
     const doc    = ctx.message.document;
@@ -1487,7 +1481,6 @@ tgBot.on('document', async (ctx) => {
         }
     }
 
-    // Fallback: import VCF ke WA — perlu akses
     if (!isAdmin(userId)) {
         const status = await getUserStatus(userId);
         if (!['regular', 'trial'].includes(status)) {
@@ -1551,7 +1544,6 @@ tgBot.on('photo', async (ctx) => {
 });
 
 // ========== COMMANDS ==========
-
 tgBot.command('cv_txt_to_vcf',  async (ctx) => handleCvTxtToVcfStart(ctx, ctx.from.id));
 tgBot.command('cv_vcf_to_txt',  async (ctx) => handleCvVcfToTxtStart(ctx, ctx.from.id));
 tgBot.command('cv_xlsx_to_vcf', async (ctx) => handleCvXlsxToVcfStart(ctx, ctx.from.id));
@@ -1580,12 +1572,10 @@ tgBot.command('renamefile', async (ctx) => {
     await handleRenameFileStart(ctx, ctx.from.id, newName);
 });
 
-// FIX: /listgc sekarang memanggil fungsi terpusat
 tgBot.command('listgc', async (ctx) => {
     await handleListGc(ctx);
 });
 
-// /done dan /selesai
 tgBot.command(['done', 'selesai'], async (ctx) => {
     const userId = ctx.from.id;
     const state  = getState(userId);
@@ -1618,7 +1608,6 @@ tgBot.command('batal', async (ctx) => {
     await safeReply(ctx, '✅ Proses dibatalkan.');
 });
 
-// ========== START COMMAND ==========
 tgBot.start(async (ctx) => {
     const userId = ctx.from.id;
     const name   = ctx.from.first_name || 'User';
@@ -1628,7 +1617,6 @@ tgBot.start(async (ctx) => {
 });
 
 // ========== HEARS HANDLERS ==========
-
 tgBot.hears('🔧 File Tools', async (ctx) => {
     await safeReply(ctx, `🔧 *FILE TOOLS MENU*\n\nPilih tool yang ingin digunakan:`, { ...KB_FILE_TOOLS });
 });
@@ -1652,8 +1640,6 @@ tgBot.hears('✏️ Rename Kontak', async (ctx) => handleRenamectcStart(ctx, ctx
 tgBot.hears('📸 Rekap Grup',    async (ctx) => handleRekapGroup(ctx, ctx.from.id));
 tgBot.hears('📄 Pesan ke TXT',  async (ctx) => handleTotxtStart(ctx, ctx.from.id));
 tgBot.hears('📁 Admin File Manager', async (ctx) => handleCvAdminFile(ctx, ctx.from.id));
-
-// FIX: List Grup WA hears sekarang pakai fungsi terpusat
 tgBot.hears('📋 List Grup WA', async (ctx) => handleListGc(ctx));
 
 tgBot.hears('✂️ Pecah VCF (jlh)', async (ctx) => {
@@ -1665,8 +1651,6 @@ tgBot.hears('📝 Rename File', async (ctx) => {
 });
 
 // ========== INLINE BUTTON HANDLERS ==========
-
-// Pecah file
 tgBot.action(/^pecahfile_(\d+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const parts = parseInt(ctx.match[1]);
@@ -1699,7 +1683,6 @@ tgBot.action('pecahfile_cancel', async (ctx) => {
     await ctx.editMessageText('✖ Dibatalkan.');
 });
 
-// Rename kontak
 tgBot.action('rename_prefix', async (ctx) => {
     await ctx.answerCbQuery();
     const state = getState(ctx.from.id);
@@ -1729,7 +1712,6 @@ tgBot.action('rename_cancel', async (ctx) => {
     await ctx.editMessageText('✖ Rename kontak dibatalkan.');
 });
 
-// Admin file
 tgBot.action('adminfile_upload', async (ctx) => {
     if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('⛔ Ditolak.');
     await ctx.answerCbQuery();
@@ -1785,7 +1767,6 @@ tgBot.action(/^adminfiledel_(\d+)$/, async (ctx) => {
     if (!fileName) return ctx.editMessageText('❌ File tidak ditemukan.');
 
     try {
-        // FIX: Pastikan path aman sebelum hapus
         const safeName = safeFilename(fileName);
         fs.unlinkSync(path.join(ADMIN_FILES_DIR, safeName));
         clearState(ctx.from.id);
@@ -1828,7 +1809,6 @@ tgBot.action(/^adminfiledl_(\d+)$/, async (ctx) => {
     if (!fileName) return ctx.editMessageText('❌ File tidak ditemukan.');
 
     try {
-        // FIX: Pastikan path aman sebelum baca
         const safeName = safeFilename(fileName);
         const filePath = path.join(ADMIN_FILES_DIR, safeName);
         const buffer   = fs.readFileSync(filePath);
@@ -1844,8 +1824,6 @@ tgBot.action('adminfiledl_cancel', async (ctx) => {
     await ctx.editMessageText('✖ Dibatalkan.');
 });
 
-// VCF import actions
-// FIX: vcf_add_all sekarang benar-benar melakukan import kontak ke grup WA
 tgBot.action('vcf_add_all', async (ctx) => {
     await ctx.answerCbQuery();
     const userId  = ctx.from.id;
@@ -1886,7 +1864,6 @@ tgBot.action('vcf_add_all', async (ctx) => {
                 failCount += batch.length;
                 log('WARN', 'VcfAddAll', `Batch gagal: ${err.message}`);
             }
-            // Delay antar batch untuk hindari rate limit WA
             if (i + batchSize < contacts.length) {
                 await new Promise(r => setTimeout(r, 1000));
             }
@@ -1954,7 +1931,7 @@ http.createServer((req, res) => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
             status:    'ok',
-            bot:       'WA Kicker Bot v6.1.0',
+            bot:       'WA Kicker Bot v6.2.0',
             uptime:    Math.floor(process.uptime()) + 's',
             timestamp: new Date().toISOString(),
             sessions:  userSessions.size,
@@ -1974,14 +1951,9 @@ http.createServer((req, res) => {
 });
 
 // ========== GRACEFUL SHUTDOWN ==========
-// FIX: Tutup semua sesi WA dengan benar sebelum exit
 async function gracefulShutdown(signal) {
     console.log(`\n🛑 Menerima ${signal}, shutdown graceful...`);
-
-    // Hentikan bot Telegram
     tgBot.stop(signal);
-
-    // Tutup semua sesi WhatsApp aktif
     const closePromises = [];
     for (const [userId, session] of userSessions.entries()) {
         if (session?.sock) {
@@ -1989,12 +1961,11 @@ async function gracefulShutdown(signal) {
             closePromises.push(
                 Promise.race([
                     session.sock.logout().catch(() => session.sock.end(new Error('shutdown'))),
-                    new Promise(r => setTimeout(r, 3000)) // timeout 3s per sesi
+                    new Promise(r => setTimeout(r, 3000))
                 ])
             );
         }
     }
-
     await Promise.allSettled(closePromises);
     console.log('👋 Bot berhenti dengan bersih.');
     process.exit(0);
@@ -2003,20 +1974,17 @@ async function gracefulShutdown(signal) {
 process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
-// Tangkap unhandled rejection agar bot tidak crash
 process.on('unhandledRejection', (reason, promise) => {
     log('ERROR', 'UnhandledRejection', `Promise: ${promise}, Reason: ${reason}`);
 });
 
 process.on('uncaughtException', (err) => {
     log('ERROR', 'UncaughtException', err.message, err);
-    // Jangan exit — biarkan bot terus berjalan untuk error non-fatal
 });
 
-// ========== LAUNCH ==========
 tgBot.launch().then(() => {
     console.log('\n╔══════════════════════════════════════════╗');
-    console.log('║  WA KICKER BOT v6.1.0 - BUGFIX EDITION  ║');
+    console.log('║  WA KICKER BOT v6.2.0 - NO-SPAM EDITION  ║');
     console.log('║  FILE TOOLS - BISA DIAKSES SEMUA         ║');
     console.log('║  FITUR WA   - PERLU LOGIN & AKSES        ║');
     console.log('╚══════════════════════════════════════════╝\n');
@@ -2024,7 +1992,10 @@ tgBot.launch().then(() => {
     console.log(`📁 Data dir   : ${DATA_DIR}`);
     console.log(`📦 Max file   : ${MAX_FILE_SIZE_MB}MB`);
     console.log(`👥 Max kontak : ${MAX_CONTACTS_PER_FILE.toLocaleString()}/file`);
-    console.log(`⏱️  DL timeout : ${DOWNLOAD_TIMEOUT_MS / 1000}s\n`);
+    console.log(`⏱️  DL timeout : ${DOWNLOAD_TIMEOUT_MS / 1000}s`);
+    console.log(`\n✨ PERBAIKAN: File collector sekarang TIDAK SPAM!`);
+    console.log(`   - Hanya 1 balasan untuk file pertama`);
+    console.log(`   - Ringkasan semua file ditampilkan saat /done\n`);
 }).catch(err => {
     console.error('❌ Gagal launch bot:', err.message);
     process.exit(1);
