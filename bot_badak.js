@@ -1477,51 +1477,63 @@ tgBot.command('revoke', async (ctx) => {
 
 // FIX: command help → 1 definisi saja
 tgBot.command('help', async (ctx) => {
-    const userId = ctx.from.id;
-    const kb     = await getKeyboard(userId);
-    const helpText = `🤖 WA KICKER BOT - PANDUAN
+    const helpText = `🤖 *WA KICKER BOT - PANDUAN LENGKAP*
 
 ${'─'.repeat(30)}
-🔧 FILE TOOLS (semua user):
-/cv_txt_to_vcf  - TXT → VCF (batch)
-/cv_vcf_to_txt  - VCF → TXT (batch)
-/cv_xlsx_to_vcf - XLSX → VCF
-/txt2vcf        - Auto-detect TXT → VCF
-/gabungtxt      - Gabung banyak TXT
-/gabungvcf      - Gabung banyak VCF
-/pecahfile      - Pecah VCF per bagian
-/pecahctc [n]   - Pecah VCF per n kontak
-/addctc         - Tambah kontak ke VCF
-/delctc         - Hapus kontak dari VCF
-/hitungctc      - Hitung kontak VCF
-/renamectc      - Rename kontak VCF
-/renamefile [n] - Rename file
-/totxt          - Simpan pesan ke TXT
-/rekapgroup     - Rekap grup dari foto
+
+🔧 *FILE TOOLS* (Bisa diakses semua)
+• 🔄 TXT → VCF - Konversi TXT ke VCF
+• 🔄 VCF → TXT - Konversi VCF ke TXT  
+• 📊 XLSX → VCF - Konversi Excel ke VCF
+• 📝 TXT2VCF Auto - Auto detect format
+• 🔗 Gabung TXT - Gabung multiple TXT
+• 🔗 Gabung VCF - Gabung multiple VCF
+• ✂️ Pecah VCF - Pecah per bagian
+• ✂️ Pecah VCF (jlh) - Pecah per jumlah
+• ➕ Tambah Kontak - Tambah kontak ke VCF
+• ➖ Hapus Kontak - Hapus kontak dari VCF
+• 🔢 Hitung Kontak - Hitung jumlah kontak
+• ✏️ Rename Kontak - Rename semua kontak
+• 📝 Rename File - Rename file
+• 📄 Pesan ke TXT - Simpan pesan ke TXT
+• 📸 Rekap Grup - Rekap grup dari foto
 
 ${'─'.repeat(30)}
-📱 FITUR WA (perlu login):
-/listgc  - List semua grup
-🎯 Pilih Grup - Pilih target grup
-➕ Buat Grup WA - Buat grup baru
-📥 Import VCF - Import kontak ke grup
-🔴 Kick Menu - Kick anggota grup
+
+📱 *FITUR WA* (Perlu login)
+• 🔑 Login WhatsApp - Scan QR Code
+• 📋 List Grup WA - Lihat daftar grup
+• 🎯 Pilih Grup - Pilih target grup
+• ➕ Buat Grup WA - Buat grup baru
+• 📥 Import VCF - Import kontak ke grup
+• 🔴 Kick Menu - Kick anggota grup
+• 🚪 Logout WhatsApp - Keluar dari WA
 
 ${'─'.repeat(30)}
-📋 PERINTAH UMUM:
-/start  - Mulai bot
-/done   - Selesaikan proses batch
-/batal  - Batalkan proses
-/beli   - Lihat & beli paket premium
-/help   - Panduan ini
+
+⭐ *PREMIUM*
+• /beli - Lihat paket premium
 
 ${'─'.repeat(30)}
-💳 PEMBAYARAN:
-🏦 ${PAYMENT_BANK_NAME} - ${PAYMENT_BANK_NUMBER} (${PAYMENT_BANK_HOLDER})
-📱 Dana: ${PAYMENT_DANA}
-📩 Konfirmasi: ${PAYMENT_CONTACT}`;
 
-    await safeReply(ctx, helpText, { ...kb });
+📋 *PERINTAH DASAR*
+• /start - Mulai bot
+• /done - Selesaikan proses
+• /batal - Batalkan proses
+• /beli - Beli premium
+• /help - Bantuan ini
+
+${'─'.repeat(30)}
+
+⚠️ *CARA PENGGUNAAN*
+1. Pilih menu file tools
+2. Kirim file
+3. Ketik /done
+4. Hasil akan dikirim
+
+❓ Pertanyaan? Hubungi admin: ${PAYMENT_CONTACT}`;
+
+    await safeReply(ctx, helpText);
 });
 
 tgBot.command(['done', 'selesai'], async (ctx) => {
@@ -1760,31 +1772,77 @@ tgBot.hears('🎁 Coba Gratis (Trial)', async (ctx) => {
 });
 
 // FIX: Satu definisi untuk ❓ Bantuan
+
 tgBot.hears('❓ Bantuan', async (ctx) => {
-    await ctx.reply(
-        `🤖 WA KICKER BOT - PANDUAN\n\n` +
-        `🔧 FILE TOOLS (Semua user bisa akses):\n` +
-        `• 🔄 TXT → VCF   • 🔄 VCF → TXT\n` +
-        `• 📊 XLSX → VCF  • 📝 TXT2VCF Auto\n` +
-        `• 🔗 Gabung TXT  • 🔗 Gabung VCF\n` +
-        `• ✂️ Pecah VCF   • ➕ Tambah Kontak\n` +
-        `• ➖ Hapus Kontak • 🔢 Hitung Kontak\n` +
-        `• ✏️ Rename Kontak • 📝 Rename File\n` +
-        `• 📄 Pesan ke TXT • 📸 Rekap Grup\n\n` +
-        `📱 FITUR WA (Perlu login & akses):\n` +
-        `• Login → Scan QR Code WhatsApp\n` +
-        `• Daftar/Pilih Grup → Manage grup\n` +
-        `• Buat Grup WA → Grup baru\n` +
-        `• Import VCF → Tambah kontak ke grup\n` +
-        `• Kick Menu → Kick anggota\n\n` +
-        `⭐ PAKET PREMIUM:\n` +
-        `• /beli - Lihat semua paket\n\n` +
-        `📋 PERINTAH:\n` +
-        `/done - Selesaikan proses\n` +
-        `/batal - Batalkan proses\n` +
-        `/help - Panduan lengkap\n\n` +
-        `❓ Pertanyaan? Hub: ${PAYMENT_CONTACT}`
-    );
+    const helpText = `🤖 *WA KICKER BOT - PANDUAN LENGKAP*
+
+${'─'.repeat(30)}
+
+🔧 *FILE TOOLS* (Bisa diakses semua)
+• 🔄 TXT → VCF - Konversi TXT ke VCF
+• 🔄 VCF → TXT - Konversi VCF ke TXT  
+• 📊 XLSX → VCF - Konversi Excel ke VCF
+• 📝 TXT2VCF Auto - Auto detect format
+• 🔗 Gabung TXT - Gabung multiple TXT
+• 🔗 Gabung VCF - Gabung multiple VCF
+• ✂️ Pecah VCF - Pecah per bagian
+• ✂️ Pecah VCF (jlh) - Pecah per jumlah
+• ➕ Tambah Kontak - Tambah kontak ke VCF
+• ➖ Hapus Kontak - Hapus kontak dari VCF
+• 🔢 Hitung Kontak - Hitung jumlah kontak
+• ✏️ Rename Kontak - Rename semua kontak
+• 📝 Rename File - Rename file
+• 📄 Pesan ke TXT - Simpan pesan ke TXT
+• 📸 Rekap Grup - Rekap grup dari foto
+
+${'─'.repeat(30)}
+
+📱 *FITUR WA* (Perlu login)
+• 🔑 Login WhatsApp - Scan QR Code
+• 📋 List Grup WA - Lihat daftar grup
+• 🎯 Pilih Grup - Pilih target grup
+• ➕ Buat Grup WA - Buat grup baru
+• 📥 Import VCF - Import kontak ke grup
+• 🔴 Kick Menu - Kick anggota grup
+• 🚪 Logout WhatsApp - Keluar dari WA
+
+${'─'.repeat(30)}
+
+⭐ *PREMIUM*
+• /beli - Lihat paket premium
+• Paket Reguler (30 hari) - Rp 50.000
+• Paket Pro (90 hari) - Rp 120.000
+• Paket Lifetime (Selamanya) - Rp 300.000
+
+${'─'.repeat(30)}
+
+📋 *PERINTAH DASAR*
+• /start - Mulai bot
+• /done - Selesaikan proses
+• /batal - Batalkan proses
+• /beli - Beli premium
+• /help - Bantuan ini
+
+${'─'.repeat(30)}
+
+💳 *PEMBAYARAN*
+🏦 Bank: ${PAYMENT_BANK_NAME}
+📞 No Rek: ${PAYMENT_BANK_NUMBER}
+👤 A.n: ${PAYMENT_BANK_HOLDER}
+📱 Dana: ${PAYMENT_DANA}
+📩 Konfirmasi: ${PAYMENT_CONTACT}
+
+${'─'.repeat(30)}
+
+⚠️ *CARA PENGGUNAAN FILE TOOLS*
+1. Pilih menu (contoh: 🔗 Gabung TXT)
+2. Kirim file satu per satu
+3. Setelah selesai, ketik /done
+4. Bot akan proses dan kirim hasil
+
+❓ Ada pertanyaan? Hubungi admin: ${PAYMENT_CONTACT}`;
+
+    await safeReply(ctx, helpText);
 });
 
 // Admin menus
