@@ -528,68 +528,82 @@ async function requireAccess(ctx, next) {
 // ========================================
 // ========== FILE TOOL HANDLERS ==========
 // ========================================
-
-// --- 1. TXT → VCF (Multiple) ---
+// ========== FILE HANDLERS (NO-SPAM VERSION) ==========
+// --- 1. TXT to VCF (Multiple) ---
 async function handleCvTxtToVcfStart(ctx, userId) {
     setState(userId, { mode: 'cv_txt_to_vcf', files: [], fileNames: [], collecting: true });
-    await safeReply(ctx, `📥 Mode TXT → VCF aktif.\n\nKirim file .txt satu per satu, lalu ketik /done setelah selesai.\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `📥 *Mengumpulkan file TXT...*\n\nSetelah selesai mengirimkan File silahkan tekan /done untuk melanjutkan`);
 }
 
 async function handleCvTxtToVcfFile(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.txt';
-    if (!fname.toLowerCase().endsWith('.txt'))
+    if (!fname.toLowerCase().endsWith('.txt')) {
         return safeReply(ctx, '⚠️ Hanya file .txt yang diterima.');
-    if (state.files.length >= MAX_FILES_PER_BATCH)
+    }
+    if (state.files.length >= MAX_FILES_PER_BATCH) {
         return safeReply(ctx, `❌ Maksimal ${MAX_FILES_PER_BATCH} file per batch.`);
+    }
     try {
-        const buffer = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        state.files.push({ name: fname, content: buffer.toString('utf-8') });
+        const buffer      = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
+        const textContent = buffer.toString('utf-8');
+        state.files.push({ name: fname, content: textContent });
+        state.fileNames = state.fileNames || [];
         state.fileNames.push(fname);
         setState(userId, state);
-        await safeReply(ctx, `✅ File ke-${state.files.length} diterima: ${fname}\nKirim file lain atau ketik /done.`);
     } catch (err) {
         log('ERROR', 'CvTxtToVcf', err.message, err);
-        await safeReply(ctx, `❌ Error: ${err.message}`);
+        await safeReply(ctx, `❌ Error membaca file: ${err.message}`);
     }
 }
 
 async function finalizeCvTxtToVcf(ctx, userId, state) {
-    if (state.files.length === 0) { clearState(userId); return safeReply(ctx, '❌ Tidak ada file.'); }
+    if (state.files.length === 0) {
+        clearState(userId);
+        return safeReply(ctx, '❌ Tidak ada file yang dikumpulkan.');
+    }
     try {
-        await safeReply(ctx, `⏳ Memproses ${state.files.length} file...`);
+        const fileList = state.fileNames.map((f, i) => `${i+1}. ${f}`).join('\n');
+        await safeReply(ctx, `📥 *${state.files.length} file diterima:*\n\n${fileList}\n\n${'─'.repeat(30)}\n⏳ Memproses konversi...`);
+        
         const results = [];
         for (const file of state.files) {
-            const contacts   = parseTxtLines(file.content);
-            const baseName   = file.name.replace(/\.txt$/i, '');
-            const vcfContent = generateVCF(contacts);
-            await sendFile(ctx, Buffer.from(vcfContent, 'utf-8'), `${baseName}.vcf`, `✅ ${file.name} → ${baseName}.vcf (${contacts.length} kontak)`);
-            results.push(`✅ ${file.name} → ${contacts.length} kontak`);
+            const contacts    = parseTxtLines(file.content);
+            const baseName    = file.name.replace(/\.txt$/i, '');
+            const vcfContent  = generateVCF(contacts);
+            const vcfBuffer   = Buffer.from(vcfContent, 'utf-8');
+            await sendFile(ctx, vcfBuffer, `${baseName}.vcf`, `✅ ${file.name} → ${baseName}.vcf (${contacts.length} kontak)`);
+            results.push(`✅ ${file.name} → ${baseName}.vcf (${contacts.length} kontak)`);
         }
-        await safeReply(ctx, `📦 Selesai!\n${results.join('\n')}`);
+        await safeReply(ctx, `📦 *HASIL KONVERSI*\n\n${results.join('\n')}\n\n📊 Total: ${state.files.length} file diproses`);
     } catch (err) {
         log('ERROR', 'CvTxtToVcf', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
-    } finally { clearState(userId); }
+    } finally {
+        clearState(userId);
+    }
 }
 
-// --- 2. VCF → TXT (Multiple) ---
+// --- 2. VCF to TXT (Multiple) ---
 async function handleCvVcfToTxtStart(ctx, userId) {
     setState(userId, { mode: 'cv_vcf_to_txt', files: [], fileNames: [], collecting: true });
-    await safeReply(ctx, `📥 Mode VCF → TXT aktif.\n\nKirim file .vcf satu per satu, lalu ketik /done.\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `📥 *Mengumpulkan file VCF...*\n\nSetelah selesai mengirimkan File silahkan tekan /done untuk melanjutkan`);
 }
 
 async function handleCvVcfToTxtFile(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.vcf';
-    if (!fname.toLowerCase().endsWith('.vcf'))
+    if (!fname.toLowerCase().endsWith('.vcf')) {
         return safeReply(ctx, '⚠️ Hanya file .vcf yang diterima.');
-    if (state.files.length >= MAX_FILES_PER_BATCH)
+    }
+    if (state.files.length >= MAX_FILES_PER_BATCH) {
         return safeReply(ctx, `❌ Maksimal ${MAX_FILES_PER_BATCH} file per batch.`);
+    }
     try {
-        const buffer = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        state.files.push({ name: fname, content: buffer.toString('utf-8') });
+        const buffer  = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
+        const vcfText = buffer.toString('utf-8');
+        state.files.push({ name: fname, content: vcfText });
+        state.fileNames = state.fileNames || [];
         state.fileNames.push(fname);
         setState(userId, state);
-        await safeReply(ctx, `✅ File ke-${state.files.length} diterima: ${fname}\nKirim file lain atau ketik /done.`);
     } catch (err) {
         log('ERROR', 'CvVcfToTxt', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
@@ -597,39 +611,57 @@ async function handleCvVcfToTxtFile(ctx, userId, state, doc) {
 }
 
 async function finalizeCvVcfToTxt(ctx, userId, state) {
-    if (state.files.length === 0) { clearState(userId); return safeReply(ctx, '❌ Tidak ada file.'); }
+    if (state.files.length === 0) {
+        clearState(userId);
+        return safeReply(ctx, '❌ Tidak ada file yang dikumpulkan.');
+    }
     try {
-        await safeReply(ctx, `⏳ Memproses ${state.files.length} file...`);
+        const fileList = state.fileNames.map((f, i) => `${i+1}. ${f}`).join('\n');
+        await safeReply(ctx, `📥 *${state.files.length} file diterima:*\n\n${fileList}\n\n${'─'.repeat(30)}\n⏳ Memproses konversi...`);
+        
         const results = [];
         for (const file of state.files) {
             const contacts   = parseVCF(file.content);
             const baseName   = file.name.replace(/\.vcf$/i, '');
             const txtContent = contacts.map(c => c.phone).join('\n');
-            await sendFile(ctx, Buffer.from(txtContent, 'utf-8'), `${baseName}.txt`, `✅ ${file.name} → ${baseName}.txt (${contacts.length} nomor)`);
-            results.push(`✅ ${file.name} → ${contacts.length} nomor`);
+            const txtBuffer  = Buffer.from(txtContent, 'utf-8');
+            await sendFile(ctx, txtBuffer, `${baseName}.txt`, `✅ ${file.name} → ${baseName}.txt (${contacts.length} nomor)`);
+            results.push(`✅ ${file.name} → ${baseName}.txt (${contacts.length} nomor)`);
         }
-        await safeReply(ctx, `📦 Selesai!\n${results.join('\n')}`);
+        await safeReply(ctx, `📦 *HASIL KONVERSI*\n\n${results.join('\n')}\n\n📊 Total: ${state.files.length} file diproses`);
     } catch (err) {
         log('ERROR', 'CvVcfToTxt', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
-    } finally { clearState(userId); }
+    } finally {
+        clearState(userId);
+    }
 }
 
-// --- 3. XLSX → VCF ---
+// --- 3. XLSX to VCF ---
 async function handleCvXlsxToVcfStart(ctx, userId) {
-    if (!XLSX) return safeReply(ctx, '❌ Fitur XLSX → VCF memerlukan package xlsx.\nAdmin perlu jalankan: npm install xlsx');
+    if (!XLSX) {
+        return safeReply(ctx, '❌ Fitur XLSX → VCF memerlukan package xlsx.\n\nAdmin perlu install:\n`npm install xlsx`');
+    }
     setState(userId, { mode: 'cv_xlsx_to_vcf', waiting: true });
-    await safeReply(ctx, `📊 XLSX → VCF\n\nKirim file .xlsx.\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `📊 *XLSX → VCF*\n\nSilakan kirim file .xlsx.\nBot akan memindai semua cell dan mengambil nomor telepon yang valid.\n\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleCvXlsxToVcfFile(ctx, userId, state, doc) {
-    if (!XLSX) return safeReply(ctx, '❌ Package xlsx tidak terinstall.');
+    if (!XLSX) {
+        return safeReply(ctx, '❌ Package xlsx tidak terinstall. Hubungi admin.');
+    }
+    
     const fname = doc.file_name || 'file.xlsx';
-    if (!fname.toLowerCase().endsWith('.xlsx')) return safeReply(ctx, '⚠️ Hanya file .xlsx.');
+    if (!fname.toLowerCase().endsWith('.xlsx')) {
+        return safeReply(ctx, '⚠️ Hanya file .xlsx yang diterima.');
+    }
     try {
         const buffer   = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
         const workbook = XLSX.read(buffer, { type: 'buffer' });
-        let allNumbers = [], totalCells = 0;
+
+        let allNumbers = [];
+        let totalCells = 0;
+
         for (const sheetName of workbook.SheetNames) {
             const sheet = workbook.Sheets[sheetName];
             const data  = XLSX.utils.sheet_to_json(sheet, { header: 1 });
@@ -644,19 +676,23 @@ async function handleCvXlsxToVcfFile(ctx, userId, state, doc) {
                 }
             }
         }
-        const seen = new Set();
+
+        const seen          = new Set();
         const uniqueNumbers = [];
-        let dupCount = 0;
+        let dupCount        = 0;
         for (const num of allNumbers) {
             if (seen.has(num)) { dupCount++; continue; }
             seen.add(num);
             uniqueNumbers.push(num);
         }
+
         const contacts   = uniqueNumbers.map(num => ({ name: `Kontak ${num}`, phone: num }));
         const vcfContent = generateVCF(contacts);
         const baseName   = fname.replace(/\.xlsx$/i, '');
-        const infoText   = `📊 HASIL KONVERSI XLSX → VCF\n${'─'.repeat(30)}\n📋 File: ${fname}\n🔢 Cell dipindai: ${totalCells}\n📞 Nomor ditemukan: ${allNumbers.length}\n🚫 Duplikat: ${dupCount}\n✅ Kontak unik: ${uniqueNumbers.length}`;
-        await sendFile(ctx, Buffer.from(vcfContent, 'utf-8'), `${baseName}.vcf`, infoText);
+        const vcfBuffer  = Buffer.from(vcfContent, 'utf-8');
+
+        const infoText = `📊 HASIL KONVERSI XLSX → VCF\n${'─'.repeat(30)}\n📋 File : ${fname}\n🔢 Cell dipindai : ${totalCells}\n📞 Nomor ditemukan : ${allNumbers.length}\n🚫 Duplikat : ${dupCount}\n✅ Kontak unik : ${uniqueNumbers.length}`;
+        await sendFile(ctx, vcfBuffer, `${baseName}.vcf`, infoText);
         clearState(userId);
     } catch (err) {
         log('ERROR', 'CvXlsxToVcf', err.message, err);
@@ -668,19 +704,27 @@ async function handleCvXlsxToVcfFile(ctx, userId, state, doc) {
 // --- 4. TXT2VCF Auto-Detect ---
 async function handleTxt2VcfStart(ctx, userId) {
     setState(userId, { mode: 'txt2vcf', waiting: true });
-    await safeReply(ctx, `📝 TXT2VCF Auto-Detect\n\nKirim file .txt untuk dikonversi.\nFormat: nomor saja, nama|nomor, atau nomor nama.\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `📝 *TXT2VCF Auto-Detect*\n\nKirim file .txt untuk langsung dikonversi menjadi VCF.\n\nFormat yang didukung:\n• Nomor di depan: \`08123 Nama\`\n• Nama di depan: \`Nama 08123\`\n• Separator: \`Nama|08123\` atau \`Nama,08123\`\n• Hanya nomor: \`081234567890\`\n\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleTxt2VcfFile(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.txt';
-    if (!fname.toLowerCase().endsWith('.txt')) return safeReply(ctx, '⚠️ Hanya file .txt.');
+    if (!fname.toLowerCase().endsWith('.txt')) {
+        return safeReply(ctx, '⚠️ Hanya file .txt yang diterima.');
+    }
     try {
-        const buffer   = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        const contacts = parseTxtLines(buffer.toString('utf-8'));
-        if (contacts.length === 0) return safeReply(ctx, '❌ Tidak ada nomor valid ditemukan.');
+        const buffer      = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
+        const textContent = buffer.toString('utf-8');
+        const contacts    = parseTxtLines(textContent);
+
+        if (contacts.length === 0) {
+            return safeReply(ctx, '❌ Tidak ada nomor telepon valid yang ditemukan.');
+        }
+
         const baseName   = fname.replace(/\.txt$/i, '');
         const vcfContent = generateVCF(contacts);
-        await sendFile(ctx, Buffer.from(vcfContent, 'utf-8'), `${baseName}.vcf`, `✅ ${fname} → ${baseName}.vcf\n👤 ${contacts.length} kontak unik`);
+        const vcfBuffer  = Buffer.from(vcfContent, 'utf-8');
+        await sendFile(ctx, vcfBuffer, `${baseName}.vcf`, `✅ ${fname} → ${baseName}.vcf\n👤 ${contacts.length} kontak unik`);
         clearState(userId);
     } catch (err) {
         log('ERROR', 'Txt2Vcf', err.message, err);
@@ -692,19 +736,24 @@ async function handleTxt2VcfFile(ctx, userId, state, doc) {
 // --- 5. Gabung TXT ---
 async function handleGabungTxtStart(ctx, userId) {
     setState(userId, { mode: 'gabungtxt', files: [], fileNames: [], collecting: true });
-    await safeReply(ctx, `📥 Mode Gabung TXT aktif.\n\nKirim minimal 2 file .txt, lalu ketik /done.\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `📥 *Mengumpulkan file TXT...*\n\nSetelah selesai mengirimkan File silahkan tekan /done untuk melanjutkan`);
 }
 
 async function handleGabungTxtFile(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.txt';
-    if (!fname.toLowerCase().endsWith('.txt')) return safeReply(ctx, '⚠️ Hanya file .txt.');
-    if (state.files.length >= MAX_FILES_PER_BATCH) return safeReply(ctx, `❌ Maksimal ${MAX_FILES_PER_BATCH} file.`);
+    if (!fname.toLowerCase().endsWith('.txt')) {
+        return safeReply(ctx, '⚠️ Hanya file .txt yang diterima.');
+    }
+    if (state.files.length >= MAX_FILES_PER_BATCH) {
+        return safeReply(ctx, `❌ Maksimal ${MAX_FILES_PER_BATCH} file per batch.`);
+    }
     try {
-        const buffer = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        state.files.push({ name: fname, content: buffer.toString('utf-8') });
+        const buffer      = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
+        const textContent = buffer.toString('utf-8');
+        state.files.push({ name: fname, content: textContent });
+        state.fileNames = state.fileNames || [];
         state.fileNames.push(fname);
         setState(userId, state);
-        await safeReply(ctx, `✅ File ke-${state.files.length} diterima: ${fname}\nKirim file lain atau ketik /done.`);
     } catch (err) {
         log('ERROR', 'GabungTxt', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
@@ -712,9 +761,14 @@ async function handleGabungTxtFile(ctx, userId, state, doc) {
 }
 
 async function finalizeGabungTxt(ctx, userId, state) {
-    if (state.files.length < 2) { clearState(userId); return safeReply(ctx, '❌ Minimal 2 file untuk digabung.'); }
+    if (state.files.length < 2) {
+        clearState(userId);
+        return safeReply(ctx, '❌ Minimal 2 file untuk digabung.');
+    }
     try {
-        await safeReply(ctx, `⏳ Menggabungkan ${state.files.length} file...`);
+        const fileList = state.fileNames.map((f, i) => `${i+1}. ${f}`).join('\n');
+        await safeReply(ctx, `📥 *${state.files.length} file diterima:*\n\n${fileList}\n\n${'─'.repeat(30)}\n⏳ Memproses penggabungan...`);
+        
         const allLines = [];
         let totalLines = 0;
         for (const file of state.files) {
@@ -722,6 +776,7 @@ async function finalizeGabungTxt(ctx, userId, state) {
             totalLines += lines.length;
             allLines.push(...lines);
         }
+
         const seenLines = new Set();
         const merged    = [];
         for (const line of allLines) {
@@ -730,9 +785,13 @@ async function finalizeGabungTxt(ctx, userId, state) {
             seenLines.add(normalized);
             merged.push(line);
         }
-        const dupCount  = totalLines - merged.length;
-        const infoText  = `📄 HASIL GABUNG TXT\n${'─'.repeat(30)}\n📁 File digabung: ${state.files.length}\n📝 Total baris: ${totalLines}\n🚫 Duplikat: ${dupCount}\n✅ Baris unik: ${merged.length}`;
-        await sendFile(ctx, Buffer.from(merged.join('\n'), 'utf-8'), 'gabungan.txt', infoText);
+
+        const dupCount   = allLines.length - merged.length;
+        const txtContent = merged.join('\n');
+        const txtBuffer  = Buffer.from(txtContent, 'utf-8');
+
+        const infoText = `📄 HASIL GABUNG TXT\n${'─'.repeat(30)}\n📁 File digabung : ${state.files.length}\n📝 Total baris : ${totalLines}\n🚫 Duplikat : ${dupCount}\n✅ Baris unik : ${merged.length}`;
+        await sendFile(ctx, txtBuffer, 'gabungan.txt', infoText);
         clearState(userId);
     } catch (err) {
         log('ERROR', 'GabungTxt', err.message, err);
@@ -744,19 +803,24 @@ async function finalizeGabungTxt(ctx, userId, state) {
 // --- 6. Gabung VCF ---
 async function handleGabungVcfStart(ctx, userId) {
     setState(userId, { mode: 'gabungvcf', files: [], fileNames: [], collecting: true });
-    await safeReply(ctx, `📥 Mode Gabung VCF aktif.\n\nKirim minimal 2 file .vcf, lalu ketik /done.\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `📥 *Mengumpulkan file VCF...*\n\nSetelah selesai mengirimkan File silahkan tekan /done untuk melanjutkan`);
 }
 
 async function handleGabungVcfFile(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.vcf';
-    if (!fname.toLowerCase().endsWith('.vcf')) return safeReply(ctx, '⚠️ Hanya file .vcf.');
-    if (state.files.length >= MAX_FILES_PER_BATCH) return safeReply(ctx, `❌ Maksimal ${MAX_FILES_PER_BATCH} file.`);
+    if (!fname.toLowerCase().endsWith('.vcf')) {
+        return safeReply(ctx, '⚠️ Hanya file .vcf yang diterima.');
+    }
+    if (state.files.length >= MAX_FILES_PER_BATCH) {
+        return safeReply(ctx, `❌ Maksimal ${MAX_FILES_PER_BATCH} file per batch.`);
+    }
     try {
-        const buffer = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        state.files.push({ name: fname, content: buffer.toString('utf-8') });
+        const buffer  = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
+        const vcfText = buffer.toString('utf-8');
+        state.files.push({ name: fname, content: vcfText });
+        state.fileNames = state.fileNames || [];
         state.fileNames.push(fname);
         setState(userId, state);
-        await safeReply(ctx, `✅ File ke-${state.files.length} diterima: ${fname}\nKirim file lain atau ketik /done.`);
     } catch (err) {
         log('ERROR', 'GabungVcf', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
@@ -764,12 +828,19 @@ async function handleGabungVcfFile(ctx, userId, state, doc) {
 }
 
 async function finalizeGabungVcf(ctx, userId, state) {
-    if (state.files.length < 2) { clearState(userId); return safeReply(ctx, '❌ Minimal 2 file untuk digabung.'); }
+    if (state.files.length < 2) {
+        clearState(userId);
+        return safeReply(ctx, '❌ Minimal 2 file untuk digabung.');
+    }
     try {
-        await safeReply(ctx, `⏳ Menggabungkan ${state.files.length} file...`);
+        const fileList = state.fileNames.map((f, i) => `${i+1}. ${f}`).join('\n');
+        await safeReply(ctx, `📥 *${state.files.length} file diterima:*\n\n${fileList}\n\n${'─'.repeat(30)}\n⏳ Memproses penggabungan...`);
+        
         const allContacts = [];
         const seen        = new Set();
-        let totalContacts = 0, dupCount = 0;
+        let totalContacts = 0;
+        let dupCount      = 0;
+
         for (const file of state.files) {
             const contacts = parseVCF(file.content);
             totalContacts += contacts.length;
@@ -779,9 +850,12 @@ async function finalizeGabungVcf(ctx, userId, state) {
                 allContacts.push(c);
             }
         }
+
         const vcfContent = generateVCF(allContacts);
-        const infoText   = `📄 HASIL GABUNG VCF\n${'─'.repeat(30)}\n📁 File digabung: ${state.files.length}\n📝 Total kontak: ${totalContacts}\n🚫 Duplikat: ${dupCount}\n✅ Kontak unik: ${allContacts.length}`;
-        await sendFile(ctx, Buffer.from(vcfContent, 'utf-8'), 'gabungan.vcf', infoText);
+        const vcfBuffer  = Buffer.from(vcfContent, 'utf-8');
+
+        const infoText = `📄 HASIL GABUNG VCF\n${'─'.repeat(30)}\n📁 File digabung : ${state.files.length}\n📝 Total kontak : ${totalContacts}\n🚫 Duplikat : ${dupCount}\n✅ Kontak unik : ${allContacts.length}`;
+        await sendFile(ctx, vcfBuffer, 'gabungan.vcf', infoText);
         clearState(userId);
     } catch (err) {
         log('ERROR', 'GabungVcf', err.message, err);
@@ -790,27 +864,35 @@ async function finalizeGabungVcf(ctx, userId, state) {
     }
 }
 
-// --- 7. Pecah VCF (per bagian) ---
+// --- 7. Pecah VCF (bagian) ---
 async function handlePecahFileStart(ctx, userId) {
     setState(userId, { mode: 'pecahfile', waiting: true });
-    await safeReply(ctx, `✂️ Pecah VCF (per bagian)\n\nKirim file .vcf yang ingin dipecah.\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `✂️ *PECAH VCF (BAGIAN)*\n\nSilakan kirim file .vcf yang ingin dipecah.\n\nKetik /batal untuk membatalkan.`);
 }
 
 async function handlePecahFileVcf(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.vcf';
-    if (!fname.toLowerCase().endsWith('.vcf')) return safeReply(ctx, '⚠️ Hanya file .vcf.');
+    if (!fname.toLowerCase().endsWith('.vcf')) {
+        return safeReply(ctx, '⚠️ Hanya file .vcf yang diterima.');
+    }
     try {
         const buffer   = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        const contacts = parseVCF(buffer.toString('utf-8'));
-        if (contacts.length < 2) return safeReply(ctx, '❌ Minimal 2 kontak untuk dipecah.');
+        const vcfText  = buffer.toString('utf-8');
+        const contacts = parseVCF(vcfText);
+
+        if (contacts.length < 2) {
+            return safeReply(ctx, '❌ Minimal 2 kontak untuk dipecah.');
+        }
+
         const baseName = fname.replace(/\.vcf$/i, '');
         const keyboard = Markup.inlineKeyboard([
-            [Markup.button.callback('2 Bagian', 'pecahfile_2'), Markup.button.callback('3 Bagian', 'pecahfile_3')],
-            [Markup.button.callback('4 Bagian', 'pecahfile_4'), Markup.button.callback('5 Bagian', 'pecahfile_5')],
+            [Markup.button.callback('✂️ 2 Bagian', 'pecahfile_2'), Markup.button.callback('✂️ 3 Bagian', 'pecahfile_3')],
+            [Markup.button.callback('✂️ 4 Bagian', 'pecahfile_4'), Markup.button.callback('✂️ 5 Bagian', 'pecahfile_5')],
             [Markup.button.callback('❌ Batal', 'pecahfile_cancel')],
         ]);
+
         setState(userId, { mode: 'pecahfile', phase: 'choose_parts', contacts, baseName });
-        await safeReply(ctx, `📋 File: ${fname}\n📊 Total kontak: ${contacts.length}\n\nPilih jumlah bagian:`, { ...keyboard });
+        await safeReply(ctx, `📋 *File:* ${fname}\n📊 *Total kontak:* ${contacts.length}\n\nPilih jumlah bagian:`, { ...keyboard });
     } catch (err) {
         log('ERROR', 'PecahFile', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
@@ -818,31 +900,42 @@ async function handlePecahFileVcf(ctx, userId, state, doc) {
     }
 }
 
-// --- 8. Pecah VCF (per jumlah kontak) ---
+// --- 8. Pecah VCF (jumlah kontak) ---
 async function handlePecahCtcStart(ctx, userId, jumlah) {
     const count = Math.max(1, Math.min(10000, parseInt(jumlah) || 100));
     setState(userId, { mode: 'pecahctc', countPerFile: count, waiting: true });
-    await safeReply(ctx, `✂️ Pecah VCF (${count} kontak/file)\n\nKirim file .vcf yang ingin dipecah.\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `✂️ *PECAH VCF (${count} kontak/file)*\n\nSilakan kirim file .vcf yang ingin dipecah.\n\nKetik /batal untuk membatalkan.`);
 }
 
 async function handlePecahCtcFile(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.vcf';
-    if (!fname.toLowerCase().endsWith('.vcf')) return safeReply(ctx, '⚠️ Hanya file .vcf.');
+    if (!fname.toLowerCase().endsWith('.vcf')) {
+        return safeReply(ctx, '⚠️ Hanya file .vcf yang diterima.');
+    }
     try {
-        const buffer       = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        const contacts     = parseVCF(buffer.toString('utf-8'));
-        if (contacts.length === 0) return safeReply(ctx, '❌ Tidak ada kontak valid.');
+        const buffer      = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
+        const vcfText     = buffer.toString('utf-8');
+        const contacts    = parseVCF(vcfText);
+
+        if (contacts.length === 0) {
+            return safeReply(ctx, '❌ Tidak ada kontak valid.');
+        }
+
         const countPerFile = state.countPerFile;
         const baseName     = fname.replace(/\.vcf$/i, '');
         const totalParts   = Math.ceil(contacts.length / countPerFile);
-        await safeReply(ctx, `📋 File: ${fname}\n📊 Total kontak: ${contacts.length}\n📏 Per file: ${countPerFile}\n📁 Menjadi: ${totalParts} bagian\n\n⏳ Memproses...`);
+
+        await safeReply(ctx, `📋 *File:* ${fname}\n📊 *Total kontak:* ${contacts.length}\n📏 *Per file:* ${countPerFile} kontak\n📁 *Menjadi:* ${totalParts} bagian\n\n⏳ Memproses...`);
+
         for (let i = 0; i < totalParts; i++) {
             const partContacts = contacts.slice(i * countPerFile, (i + 1) * countPerFile);
             const vcfContent   = generateVCF(partContacts);
+            const vcfBuffer    = Buffer.from(vcfContent, 'utf-8');
             const partNum      = String(i + 1).padStart(3, '0');
-            await sendFile(ctx, Buffer.from(vcfContent, 'utf-8'), `${baseName}_${partNum}.vcf`, `📄 Bagian ${i + 1}/${totalParts}: ${partContacts.length} kontak`);
+            await sendFile(ctx, vcfBuffer, `${baseName}_${partNum}.vcf`, `📄 Bagian ${i + 1}/${totalParts}: ${partContacts.length} kontak`);
         }
-        await safeReply(ctx, `✅ Selesai! Dipecah menjadi ${totalParts} bagian.`);
+
+        await safeReply(ctx, `✅ File berhasil dipecah menjadi ${totalParts} bagian\n📋 Total kontak: ${contacts.length}\n📏 Per file: ${countPerFile} kontak`);
         clearState(userId);
     } catch (err) {
         log('ERROR', 'PecahCtc', err.message, err);
@@ -854,18 +947,25 @@ async function handlePecahCtcFile(ctx, userId, state, doc) {
 // --- 9. Tambah Kontak ---
 async function handleAddCtcStart(ctx, userId) {
     setState(userId, { mode: 'addctc', phase: 'waiting_vcf' });
-    await safeReply(ctx, `➕ Tambah Kontak VCF\n\nKirim file .vcf yang ingin ditambahi kontak.\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `➕ *TAMBAH KONTAK VCF*\n\nSilakan kirim file .vcf yang ingin ditambahi kontak.\n\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleAddCtcFile(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.vcf';
-    if (!fname.toLowerCase().endsWith('.vcf')) return safeReply(ctx, '⚠️ Hanya file .vcf.');
+    if (!fname.toLowerCase().endsWith('.vcf')) {
+        return safeReply(ctx, '⚠️ Hanya file .vcf yang diterima.');
+    }
     try {
         const buffer   = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        const contacts = parseVCF(buffer.toString('utf-8'));
-        if (contacts.length === 0) return safeReply(ctx, '❌ Tidak ada kontak valid.');
+        const vcfText  = buffer.toString('utf-8');
+        const contacts = parseVCF(vcfText);
+
+        if (contacts.length === 0) {
+            return safeReply(ctx, '❌ Tidak ada kontak valid dalam file.');
+        }
+
         setState(userId, { mode: 'addctc', phase: 'waiting_contacts', existingContacts: contacts, fileName: fname });
-        await safeReply(ctx, `📋 File: ${fname}\n👤 Kontak saat ini: ${contacts.length}\n\nKirim kontak tambahan (satu per baris):\n\nContoh:\nNama Baru|081234567890\n081987654321\n+628123456789|Nama Lain\n\nKetik /done setelah selesai atau /batal untuk batal.`);
+        await safeReply(ctx, `📋 *File:* ${fname}\n👤 *Kontak saat ini:* ${contacts.length}\n\n${'─'.repeat(30)}\nSilakan kirim kontak tambahan dalam format teks (satu per baris):\n\nContoh:\nNama Baru|081234567890\n081987654321\n+628123456789|Nama Lain\n\n${'─'.repeat(30)}\nKetik /done jika selesai atau /batal untuk batal.`);
     } catch (err) {
         log('ERROR', 'AddCtc', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
@@ -876,21 +976,34 @@ async function handleAddCtcFile(ctx, userId, state, doc) {
 // --- 10. Hapus Kontak ---
 async function handleDelCtcStart(ctx, userId) {
     setState(userId, { mode: 'delctc', phase: 'waiting_vcf' });
-    await safeReply(ctx, `➖ Hapus Kontak VCF\n\nKirim file .vcf yang ingin dihapus kontaknya.\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `➖ *HAPUS KONTAK VCF*\n\nSilakan kirim file .vcf yang ingin dihapus kontaknya.\n\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleDelCtcFile(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.vcf';
-    if (!fname.toLowerCase().endsWith('.vcf')) return safeReply(ctx, '⚠️ Hanya file .vcf.');
+    if (!fname.toLowerCase().endsWith('.vcf')) {
+        return safeReply(ctx, '⚠️ Hanya file .vcf yang diterima.');
+    }
     try {
         const buffer   = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        const contacts = parseVCF(buffer.toString('utf-8'));
-        if (contacts.length === 0) return safeReply(ctx, '❌ Tidak ada kontak valid.');
-        let preview    = `📋 DAFTAR KONTAK\n📇 File: ${fname}\n👤 Total: ${contacts.length}\n\n`;
-        const maxShow  = Math.min(30, contacts.length);
-        for (let i = 0; i < maxShow; i++) preview += `${i + 1}. ${contacts[i].name} → ${contacts[i].phone}\n`;
-        if (contacts.length > 30) preview += `\n... dan ${contacts.length - 30} kontak lainnya`;
-        preview += `\n\nKetik nomor urut yang ingin dihapus:\nFormat: 1,3,5-8,10\n\nKetik /batal untuk batal.`;
+        const vcfText  = buffer.toString('utf-8');
+        const contacts = parseVCF(vcfText);
+
+        if (contacts.length === 0) {
+            return safeReply(ctx, '❌ Tidak ada kontak valid dalam file.');
+        }
+
+        let preview = `📋 *DAFTAR KONTAK*\n${'─'.repeat(30)}\n📇 *File:* ${fname}\n👤 *Total:* ${contacts.length} kontak\n\n`;
+        const maxShow = Math.min(30, contacts.length);
+        for (let i = 0; i < maxShow; i++) {
+            const c = contacts[i];
+            preview += `${i + 1}. ${c.name} → ${c.phone}\n`;
+        }
+        if (contacts.length > 30) {
+            preview += `\n... dan ${contacts.length - 30} kontak lainnya`;
+        }
+        preview += `\n${'─'.repeat(30)}\nKetik nomor urut yang ingin dihapus:\nFormat: 1,3,5-8,10\n\nKetik /done jika selesai atau /batal untuk batal.`;
+
         setState(userId, { mode: 'delctc', phase: 'waiting_input', contacts, fileName: fname });
         await safeReply(ctx, preview);
     } catch (err) {
@@ -903,22 +1016,33 @@ async function handleDelCtcFile(ctx, userId, state, doc) {
 // --- 11. Hitung Kontak ---
 async function handleHitungCtcStart(ctx, userId) {
     setState(userId, { mode: 'hitungctc', waiting: true });
-    await safeReply(ctx, `🔢 Hitung Kontak VCF\n\nKirim file .vcf untuk dihitung.\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `🔢 *HITUNG KONTAK VCF*\n\nSilakan kirim file .vcf yang ingin dihitung.\n\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleHitungCtcFile(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.vcf';
-    if (!fname.toLowerCase().endsWith('.vcf')) return safeReply(ctx, '⚠️ Hanya file .vcf.');
+    if (!fname.toLowerCase().endsWith('.vcf')) {
+        return safeReply(ctx, '⚠️ Hanya file .vcf yang diterima.');
+    }
     try {
         const buffer   = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        const contacts = parseVCF(buffer.toString('utf-8'));
-        let withName = 0, withoutName = 0, dupCount = 0;
+        const vcfText  = buffer.toString('utf-8');
+        const contacts = parseVCF(vcfText);
+
+        let withName    = 0;
+        let withoutName = 0;
         const seenPhone = new Set();
+        let dupCount    = 0;
+
         for (const c of contacts) {
-            if (c.name && c.name !== 'Tanpa Nama') withName++; else withoutName++;
-            if (seenPhone.has(c.phone)) dupCount++; else seenPhone.add(c.phone);
+            if (c.name && c.name !== 'Tanpa Nama') withName++;
+            else withoutName++;
+            if (seenPhone.has(c.phone)) dupCount++;
+            else seenPhone.add(c.phone);
         }
-        await safeReply(ctx, `🔢 HASIL HITUNG KONTAK VCF\n${'─'.repeat(30)}\n📇 File: ${fname}\n👤 Total kontak: ${contacts.length}\n✅ Punya nama: ${withName}\n❓ Tanpa nama: ${withoutName}\n📞 Nomor unik: ${seenPhone.size}\n🚫 Nomor duplikat: ${dupCount}`);
+
+        const infoText = `🔢 *HASIL HITUNG KONTAK VCF*\n${'─'.repeat(30)}\n📇 File : ${fname}\n👤 Total kontak : ${contacts.length}\n✅ Punya nama : ${withName}\n❓ Tanpa nama : ${withoutName}\n📞 Nomor unik : ${seenPhone.size}\n🚫 Nomor duplikat : ${dupCount}`;
+        await safeReply(ctx, infoText);
         clearState(userId);
     } catch (err) {
         log('ERROR', 'HitungCtc', err.message, err);
@@ -930,27 +1054,41 @@ async function handleHitungCtcFile(ctx, userId, state, doc) {
 // --- 12. Rename Kontak ---
 async function handleRenamectcStart(ctx, userId) {
     setState(userId, { mode: 'renamectc', phase: 'waiting_vcf' });
-    await safeReply(ctx, `✏️ Rename Kontak VCF\n\nKirim file .vcf yang ingin direname.\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `✏️ *RENAME KONTAK VCF*\n\nSilakan kirim file .vcf yang ingin direname kontaknya.\n\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleRenamectcFile(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.vcf';
-    if (!fname.toLowerCase().endsWith('.vcf')) return safeReply(ctx, '⚠️ Hanya file .vcf.');
+    if (!fname.toLowerCase().endsWith('.vcf')) {
+        return safeReply(ctx, '⚠️ Hanya file .vcf yang diterima.');
+    }
     try {
         const buffer   = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        const contacts = parseVCF(buffer.toString('utf-8'));
-        if (contacts.length === 0) return safeReply(ctx, '❌ Tidak ada kontak valid.');
-        let preview = `📋 PREVIEW KONTAK\n📇 File: ${fname}\n👤 Total: ${contacts.length}\n\n`;
-        contacts.slice(0, 5).forEach((c, i) => { preview += `${i + 1}. ${c.name} → ${c.phone}\n`; });
-        if (contacts.length > 5) preview += `\n... dan ${contacts.length - 5} lainnya`;
+        const vcfText  = buffer.toString('utf-8');
+        const contacts = parseVCF(vcfText);
+
+        if (contacts.length === 0) {
+            return safeReply(ctx, '❌ Tidak ada kontak valid dalam file.');
+        }
+
+        let preview = `📋 *PREVIEW KONTAK*\n${'─'.repeat(30)}\n📇 *File:* ${fname}\n👤 *Total:* ${contacts.length} kontak\n\n`;
+        contacts.slice(0, 5).forEach((c, i) => {
+            preview += `${i + 1}. ${c.name} → ${c.phone}\n`;
+        });
+        if (contacts.length > 5) {
+            preview += `\n... dan ${contacts.length - 5} kontak lainnya`;
+        }
+        preview += `\n${'─'.repeat(30)}\nPilih metode rename:`;
+
         const keyboard = Markup.inlineKeyboard([
             [Markup.button.callback('➕ Tambah Prefix', 'rename_prefix')],
             [Markup.button.callback('➕ Tambah Suffix', 'rename_suffix')],
             [Markup.button.callback('🔢 Ganti + Nomor Urut', 'rename_numbered')],
             [Markup.button.callback('❌ Batal', 'rename_cancel')],
         ]);
+
         setState(userId, { mode: 'renamectc', phase: 'choose_method', contacts, fileName: fname });
-        await safeReply(ctx, preview + '\n\nPilih metode rename:', { ...keyboard });
+        await safeReply(ctx, preview, { ...keyboard });
     } catch (err) {
         log('ERROR', 'Renamectc', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
@@ -960,23 +1098,28 @@ async function handleRenamectcFile(ctx, userId, state, doc) {
 
 // --- 13. Rename File ---
 async function handleRenameFileStart(ctx, userId, newName) {
-    if (!newName || !newName.trim())
-        return safeReply(ctx, `Format: /renamefile [nama_baru]\nContoh: /renamefile arisan_baru`);
-    if (/[\/\\:*?"<>|]/.test(newName))
-        return safeReply(ctx, `❌ Nama file tidak boleh mengandung: / \\ : * ? " < > |`);
-    if (newName.length > 100)
+    if (!newName || newName.trim().length === 0) {
+        return safeReply(ctx, `Format: /renamefile [nama_baru]\n\nContoh: /renamefile arisan_baru`);
+    }
+    const invalidChars = /[\/\\:*?"<>|]/;
+    if (invalidChars.test(newName)) {
+        return safeReply(ctx, `❌ Nama file tidak boleh mengandung karakter: / \\ : * ? " < > |`);
+    }
+    if (newName.length > 100) {
         return safeReply(ctx, `❌ Nama file maksimal 100 karakter.`);
-    setState(userId, { mode: 'renamefile', newName: newName.trim(), waiting: true });
-    await safeReply(ctx, `✏️ Rename File\n\nKirim file yang ingin diganti namanya.\nNama baru: ${newName.trim()} (ekstensi dipertahankan)\nKetik /batal untuk membatalkan.`);
+    }
+    const trimmedName = newName.trim();
+    setState(userId, { mode: 'renamefile', newName: trimmedName, waiting: true });
+    await safeReply(ctx, `✏️ *RENAME FILE*\n\nSilakan kirim file yang ingin diganti namanya.\nNama baru: ${trimmedName} (ekstensi akan dipertahankan)\n\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleRenameFile(ctx, userId, state, doc) {
-    const fname       = doc.file_name || 'file';
-    const ext         = path.extname(fname) || '';
+    const fname      = doc.file_name || 'file';
+    const ext        = path.extname(fname) || '';
     const newFileName = `${state.newName}${ext}`;
     try {
         const buffer = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        await sendFile(ctx, buffer, safeFilename(newFileName), `✅ ${fname} → ${newFileName}`);
+        await sendFile(ctx, buffer, safeFilename(newFileName), `✅ File: ${fname}\n→ ${newFileName}`);
         clearState(userId);
     } catch (err) {
         log('ERROR', 'RenameFile', err.message, err);
@@ -988,53 +1131,62 @@ async function handleRenameFile(ctx, userId, state, doc) {
 // --- 14. Pesan ke TXT ---
 async function handleTotxtStart(ctx, userId) {
     setState(userId, { mode: 'totxt', messages: [], active: true });
-    await safeReply(ctx, `📄 Mode pengumpulan pesan aktif.\n\nSetiap pesan teks yang kamu kirim akan disimpan.\nMaks 500 pesan.\n\nKetik /done untuk generate file TXT.\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `📄 *PESAN KE TXT*\n\nMode pengumpulan pesan aktif.\nSetiap pesan teks yang kamu kirim akan disimpan.\n\nKetik /done untuk generate file TXT.\n\nMaks 500 pesan.\n\nKetik /batal untuk membatalkan.`);
 }
 
 // --- 15. Rekap Group ---
 async function handleRekapGroup(ctx, userId) {
     setState(userId, { mode: 'rekapgroup', phase: 'waiting_photo' });
-    await safeReply(ctx, `📸 Rekap Grup\n\nKirim foto screenshot info grup WhatsApp.\nAtau kirim foto dengan caption format:\nNamaGrup|JumlahMember\n\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `📸 *Rekap Grup*\n\nSilakan kirim foto/screenshot info grup WhatsApp.\nAtau kirim foto dengan caption format:\nNamaGrup|JumlahMember\n\nKetik /batal untuk membatalkan.`);
 }
 
 // --- 16. Admin File Manager ---
 async function handleCvAdminFile(ctx, userId) {
-    if (!isAdmin(userId)) return safeReply(ctx, '⛔ Akses ditolak. Hanya admin.');
+    if (!isAdmin(userId)) {
+        return safeReply(ctx, '⛔ Akses ditolak. Hanya admin.');
+    }
     const keyboard = Markup.inlineKeyboard([
         [Markup.button.callback('📤 Upload File', 'adminfile_upload')],
         [Markup.button.callback('📂 Lihat File', 'adminfile_list')],
         [Markup.button.callback('🗑️ Hapus File', 'adminfile_delete')],
         [Markup.button.callback('📥 Download File', 'adminfile_download')],
     ]);
-    await safeReply(ctx, `📁 ADMIN FILE MANAGER\n\nPilih aksi:`, { ...keyboard });
+    await safeReply(ctx, `📁 *ADMIN FILE MANAGER*\n\nPilih aksi:`, { ...keyboard });
 }
 
 async function handleAdminFileUpload(ctx, userId) {
     setState(userId, { mode: 'cvadminfile_upload', waiting: true });
-    await safeReply(ctx, `📤 Kirim file yang ingin diupload.\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `📤 Silakan kirim file yang ingin diupload.\n\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleAdminFileUploadFile(ctx, userId, state, doc) {
     const fname = safeFilename(doc.file_name || 'unnamed_file');
+
     try {
         const existingFiles = fs.readdirSync(ADMIN_FILES_DIR);
         if (existingFiles.length >= MAX_ADMIN_FILES) {
             clearState(userId);
-            return safeReply(ctx, `❌ Batas penyimpanan (${MAX_ADMIN_FILES} file) tercapai. Hapus file dulu.`);
+            return safeReply(ctx, `❌ Batas penyimpanan admin (${MAX_ADMIN_FILES} file) tercapai. Hapus beberapa file terlebih dahulu.`);
         }
-    } catch (err) { log('ERROR', 'AdminFile', `Gagal baca dir: ${err.message}`); }
+    } catch (err) {
+        log('ERROR', 'AdminFile', `Gagal baca dir: ${err.message}`);
+    }
+
     try {
-        const buffer  = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        let finalPath = path.join(ADMIN_FILES_DIR, fname);
-        let finalName = fname;
+        const buffer   = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
+        let finalPath  = path.join(ADMIN_FILES_DIR, fname);
+
         if (fs.existsSync(finalPath)) {
             const base    = path.parse(fname).name;
             const ext     = path.parse(fname).ext;
-            finalName     = `${base}_${Date.now()}${ext}`;
-            finalPath     = path.join(ADMIN_FILES_DIR, finalName);
+            const newName = `${base}_${Date.now()}${ext}`;
+            finalPath     = path.join(ADMIN_FILES_DIR, newName);
+            fs.writeFileSync(finalPath, buffer);
+            await safeReply(ctx, `✅ File diupload sebagai: ${newName}`);
+        } else {
+            fs.writeFileSync(finalPath, buffer);
+            await safeReply(ctx, `✅ File berhasil diupload: ${fname}`);
         }
-        fs.writeFileSync(finalPath, buffer);
-        await safeReply(ctx, `✅ File diupload: ${finalName}`);
         clearState(userId);
     } catch (err) {
         log('ERROR', 'AdminFile', err.message, err);
