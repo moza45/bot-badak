@@ -14,8 +14,8 @@ const crypto = require('crypto');
 const http = require('http');
 
 // ╔══════════════════════════════════════════════════════════════╗
-// ║         W A - K I C K E R   B O T   v 6 . 3 . 0            ║
-// ║           NO-SPAM + ALL FIXED                               ║
+// ║         W A - K I C K E R   B O T   v 6 . 4 . 0            ║
+// ║           ALL FIXED + READY TO DEPLOY                       ║
 // ╚══════════════════════════════════════════════════════════════╝
 
 // ========== KONFIGURASI AWAL ==========
@@ -43,14 +43,15 @@ const PAYMENT_DANA         = process.env.PAYMENT_DANA        || '081234567890';
 const PAYMENT_CONTACT      = process.env.PAYMENT_CONTACT     || '@adminusername';
 const TRIAL_DURATION_HOURS = parseInt(process.env.TRIAL_DURATION_HOURS || '24');
 const HEALTH_API_KEY       = process.env.HEALTH_API_KEY || (() => {
-    console.warn('⚠️  HEALTH_API_KEY tidak diset di .env — monitoring eksternal akan terputus setiap restart!');
-    return crypto.randomBytes(16).toString('hex');
+    const key = crypto.randomBytes(16).toString('hex');
+    console.warn(`⚠️  HEALTH_API_KEY tidak diset. Key sementara: ${key}`);
+    return key;
 })();
-const MAX_FILE_SIZE_MB     = parseInt(process.env.MAX_FILE_SIZE_MB || '10');
-const MAX_FILES_PER_BATCH  = parseInt(process.env.MAX_FILES_PER_BATCH || '20');
+const MAX_FILE_SIZE_MB      = parseInt(process.env.MAX_FILE_SIZE_MB || '10');
+const MAX_FILES_PER_BATCH   = parseInt(process.env.MAX_FILES_PER_BATCH || '20');
 const MAX_CONTACTS_PER_FILE = parseInt(process.env.MAX_CONTACTS_PER_FILE || '50000');
-const MAX_ADMIN_FILES      = parseInt(process.env.MAX_ADMIN_FILES || '100');
-const DOWNLOAD_TIMEOUT_MS  = parseInt(process.env.DOWNLOAD_TIMEOUT_MS || '30000');
+const MAX_ADMIN_FILES       = parseInt(process.env.MAX_ADMIN_FILES || '100');
+const DOWNLOAD_TIMEOUT_MS   = parseInt(process.env.DOWNLOAD_TIMEOUT_MS || '30000');
 
 // ========== PERSISTENT STORAGE ==========
 const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || './data';
@@ -70,7 +71,7 @@ try {
     XLSX = require('xlsx');
     console.log('✅ xlsx package loaded successfully');
 } catch (e) {
-    console.log('⚠️  xlsx package tidak terinstall. Fitur /cv_xlsx_to_vcf tidak akan berfungsi.');
+    console.log('⚠️  xlsx package tidak terinstall. Fitur XLSX → VCF tidak akan berfungsi.');
 }
 
 // ========== DATABASE JSON ==========
@@ -115,55 +116,41 @@ class UserDatabase {
             notifiedExpiry: user.notifiedExpiry ? 1 : 0,
             updatedAt:      new Date().toISOString()
         };
-        try {
-            writeJSON(USERS_FILE, this.users);
-        } catch (err) {
-            log('ERROR', 'DB', `Gagal simpan user ${user.id}: ${err.message}`, err);
+        try { writeJSON(USERS_FILE, this.users); } catch (err) {
+            log('ERROR', 'DB', `Gagal simpan user ${user.id}: ${err.message}`);
         }
     }
 
-    getAllUsers() {
-        return Object.values(this.users);
-    }
+    getAllUsers() { return Object.values(this.users); }
 
     deleteUser(userId) {
         delete this.users[String(userId)];
-        try {
-            writeJSON(USERS_FILE, this.users);
-        } catch (err) {
-            log('ERROR', 'DB', `Gagal hapus user ${userId}: ${err.message}`, err);
+        try { writeJSON(USERS_FILE, this.users); } catch (err) {
+            log('ERROR', 'DB', `Gagal hapus user ${userId}: ${err.message}`);
         }
     }
 
-    getAllPendingPayments() {
-        return Object.values(this.payments);
-    }
+    getAllPendingPayments() { return Object.values(this.payments); }
 
     addPendingPayment(payment) {
-        this.payments[String(payment.id)] = payment;
-        try {
-            writeJSON(PAYMENTS_FILE, this.payments);
-        } catch (err) {
-            log('ERROR', 'DB', `Gagal simpan payment: ${err.message}`, err);
+        this.payments[String(payment.userId)] = payment;
+        try { writeJSON(PAYMENTS_FILE, this.payments); } catch (err) {
+            log('ERROR', 'DB', `Gagal simpan payment: ${err.message}`);
         }
     }
 
     removePendingPayment(userId) {
         delete this.payments[String(userId)];
-        try {
-            writeJSON(PAYMENTS_FILE, this.payments);
-        } catch (err) {
-            log('ERROR', 'DB', `Gagal hapus payment: ${err.message}`, err);
+        try { writeJSON(PAYMENTS_FILE, this.payments); } catch (err) {
+            log('ERROR', 'DB', `Gagal hapus payment: ${err.message}`);
         }
     }
 
     updateNotifiedFlag(userId) {
         if (this.users[String(userId)]) {
             this.users[String(userId)].notifiedExpiry = 1;
-            try {
-                writeJSON(USERS_FILE, this.users);
-            } catch (err) {
-                log('ERROR', 'DB', `Gagal update flag notif: ${err.message}`, err);
+            try { writeJSON(USERS_FILE, this.users); } catch (err) {
+                log('ERROR', 'DB', `Gagal update flag notif: ${err.message}`);
             }
         }
     }
@@ -178,7 +165,7 @@ function log(level, module, message, error = null) {
 }
 
 // ========== GLOBAL STATE ==========
-const tgBot = new Telegraf(TELEGRAM_BOT_TOKEN);
+const tgBot         = new Telegraf(TELEGRAM_BOT_TOKEN);
 const userStates    = new Map();
 const userSessions  = new Map();
 const kickSelections = new Map();
@@ -186,7 +173,7 @@ const loginLocks    = new Map();
 const vcfPending    = new Map();
 
 // ========== RATE LIMITER ==========
-const rateLimitMap = new Map();
+const rateLimitMap         = new Map();
 const RATE_LIMIT_WINDOW_MS = 5000;
 const RATE_LIMIT_MAX       = 10;
 
@@ -194,7 +181,7 @@ function isRateLimited(userId) {
     const now   = Date.now();
     const entry = rateLimitMap.get(userId) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
     if (now > entry.resetAt) {
-        entry.count  = 1;
+        entry.count   = 1;
         entry.resetAt = now + RATE_LIMIT_WINDOW_MS;
     } else {
         entry.count++;
@@ -213,20 +200,14 @@ tgBot.use(async (ctx, next) => {
 });
 
 // ========== FUNGSI HELPERS ==========
-function isAdmin(userId) {
-    return ADMIN_IDS.includes(userId);
-}
+function isAdmin(userId) { return ADMIN_IDS.includes(userId); }
 
 async function getUserStatus(userId) {
     if (isAdmin(userId)) return 'admin';
     const u = db.getUser(userId);
     if (!u) return 'none';
-    if (u.role === 'regular') {
-        return new Date(u.expiresAt) > new Date() ? 'regular' : 'expired';
-    }
-    if (u.role === 'trial') {
-        return new Date(u.trialExpiresAt) > new Date() ? 'trial' : 'trial_expired';
-    }
+    if (u.role === 'regular') return new Date(u.expiresAt) > new Date() ? 'regular' : 'expired';
+    if (u.role === 'trial')   return new Date(u.trialExpiresAt) > new Date() ? 'trial' : 'trial_expired';
     return 'none';
 }
 
@@ -250,9 +231,7 @@ function formatCountdown(isoStr) {
     return `${hours} jam ${mins} menit`;
 }
 
-function formatRupiah(num) {
-    return 'Rp ' + num.toLocaleString('id-ID');
-}
+function formatRupiah(num) { return 'Rp ' + num.toLocaleString('id-ID'); }
 
 function esc(text) {
     if (!text) return '';
@@ -298,35 +277,29 @@ async function safeReply(ctx, text, opts = {}) {
 }
 
 async function downloadTelegramFile(ctx, fileId, fileSizeMB = null) {
-    if (fileSizeMB !== null && fileSizeMB > MAX_FILE_SIZE_MB) {
+    if (fileSizeMB !== null && fileSizeMB > MAX_FILE_SIZE_MB)
         throw new Error(`File terlalu besar. Maks ${MAX_FILE_SIZE_MB}MB.`);
-    }
 
-    const fileLink = await ctx.telegram.getFileLink(fileId);
+    const fileLink   = await ctx.telegram.getFileLink(fileId);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+    const timer      = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
 
     try {
         const resp = await fetch(fileLink.href, { signal: controller.signal });
         if (!resp.ok) throw new Error(`HTTP ${resp.status} saat download file`);
         const buffer = Buffer.from(await resp.arrayBuffer());
-        if (buffer.length > MAX_FILE_SIZE_MB * 1024 * 1024) {
+        if (buffer.length > MAX_FILE_SIZE_MB * 1024 * 1024)
             throw new Error(`File terlalu besar. Maks ${MAX_FILE_SIZE_MB}MB.`);
-        }
         return buffer;
     } catch (err) {
-        if (err.name === 'AbortError') {
-            throw new Error(`Download timeout setelah ${DOWNLOAD_TIMEOUT_MS / 1000}s.`);
-        }
+        if (err.name === 'AbortError') throw new Error(`Download timeout setelah ${DOWNLOAD_TIMEOUT_MS / 1000}s.`);
         throw err;
     } finally {
         clearTimeout(timer);
     }
 }
 
-function bytesToMB(bytes) {
-    return bytes ? bytes / (1024 * 1024) : null;
-}
+function bytesToMB(bytes) { return bytes ? bytes / (1024 * 1024) : null; }
 
 async function sendFile(ctx, buffer, filename, caption = '') {
     await ctx.replyWithDocument(
@@ -337,14 +310,14 @@ async function sendFile(ctx, buffer, filename, caption = '') {
 
 function generateVCF(contacts) {
     const seen = new Set();
-    const uniqueContacts = [];
+    const unique = [];
     for (const { name, phone } of contacts) {
         const norm = normalizePhone(phone);
         if (!norm || seen.has(norm)) continue;
         seen.add(norm);
-        uniqueContacts.push({ name: name || `Kontak ${phone}`, phone: norm });
+        unique.push({ name: name || `Kontak ${phone}`, phone: norm });
     }
-    return uniqueContacts.map(({ name, phone }) =>
+    return unique.map(({ name, phone }) =>
         `BEGIN:VCARD\nVERSION:3.0\nFN:${name}\nTEL;TYPE=CELL:+${phone}\nEND:VCARD`
     ).join('\n');
 }
@@ -356,10 +329,10 @@ function parseVCF(vcfText) {
 
     for (const block of blocks) {
         if (contacts.length >= MAX_CONTACTS_PER_FILE) {
-            log('WARN', 'parseVCF', `Batas ${MAX_CONTACTS_PER_FILE} kontak tercapai, sisanya dilewati.`);
+            log('WARN', 'parseVCF', `Batas ${MAX_CONTACTS_PER_FILE} kontak tercapai.`);
             break;
         }
-        let name     = 'Tanpa Nama';
+        let name = 'Tanpa Nama';
         const fnMatch = block.match(/^FN[;:][^\r\n]*/mi);
         if (fnMatch) name = fnMatch[0].replace(/^FN.*?:/i, '').trim();
         name = name.replace(/[\x00-\x1F]/g, '').trim() || 'Tanpa Nama';
@@ -397,9 +370,8 @@ function autoDetectAndParse(line) {
     if (tabMatch) {
         const a = tabMatch[1].trim();
         const b = tabMatch[2].trim();
-        if (/^\+?[0-9]{10,15}$/.test(a.replace(/[\s\-().]/g, ''))) {
+        if (/^\+?[0-9]{10,15}$/.test(a.replace(/[\s\-().]/g, '')))
             return { phone: a, name: b };
-        }
         return { phone: b, name: a };
     }
     return null;
@@ -431,51 +403,26 @@ const STATE_TTL_MS = 30 * 60 * 1000;
 function setState(userId, data) {
     userStates.set(userId, { ...data, expiresAt: Date.now() + STATE_TTL_MS });
 }
-
 function getState(userId) {
     const state = userStates.get(userId);
     if (!state) return null;
-    if (Date.now() > state.expiresAt) {
-        userStates.delete(userId);
-        return null;
-    }
+    if (Date.now() > state.expiresAt) { userStates.delete(userId); return null; }
     return state;
 }
-
-function clearState(userId) {
-    userStates.delete(userId);
-}
+function clearState(userId) { userStates.delete(userId); }
 
 setInterval(() => {
     const now = Date.now();
-
-    for (const [uid, state] of userStates.entries()) {
-        if (state.expiresAt && now > state.expiresAt) {
-            userStates.delete(uid);
-        }
-    }
-
-    for (const [uid, pending] of vcfPending.entries()) {
-        if (pending.createdAt && now - pending.createdAt > 15 * 60 * 1000) {
-            vcfPending.delete(uid);
-        }
-    }
-
-    for (const [uid, sel] of kickSelections.entries()) {
-        if (sel.createdAt && now - sel.createdAt > 30 * 60 * 1000) {
-            kickSelections.delete(uid);
-        }
-    }
-
-    for (const [uid, lockTime] of loginLocks.entries()) {
-        if (now - lockTime > 5 * 60 * 1000) {
-            loginLocks.delete(uid);
-        }
-    }
-
-    for (const [uid, entry] of rateLimitMap.entries()) {
-        if (now > entry.resetAt + 60000) rateLimitMap.delete(uid);
-    }
+    for (const [uid, s] of userStates.entries())
+        if (s.expiresAt && now > s.expiresAt) userStates.delete(uid);
+    for (const [uid, p] of vcfPending.entries())
+        if (p.createdAt && now - p.createdAt > 15 * 60 * 1000) vcfPending.delete(uid);
+    for (const [uid, s] of kickSelections.entries())
+        if (s.createdAt && now - s.createdAt > 30 * 60 * 1000) kickSelections.delete(uid);
+    for (const [uid, t] of loginLocks.entries())
+        if (now - t > 5 * 60 * 1000) loginLocks.delete(uid);
+    for (const [uid, e] of rateLimitMap.entries())
+        if (now > e.resetAt + 60000) rateLimitMap.delete(uid);
 }, 10 * 60 * 1000);
 
 // ========== KEYBOARDS ==========
@@ -501,12 +448,13 @@ const KB_PRE_LOGIN = {
     }
 };
 
+// FIX: Ganti '📡 Status' → '📊 Status' agar konsisten dengan handler
 const KB_MAIN = {
     reply_markup: {
         keyboard: [
             [{ text: '📋 Daftar Grup' }, { text: '🎯 Pilih Grup' }],
             [{ text: '➕ Buat Grup WA' }, { text: '📥 Import VCF' }],
-            [{ text: '🔴 Kick Menu' }, { text: '📡 Status' }],
+            [{ text: '🔴 Kick Menu' }, { text: '📊 Status' }],
             [{ text: '🔧 File Tools' }, { text: '🚪 Logout WhatsApp' }]
         ],
         resize_keyboard: true, one_time_keyboard: false
@@ -530,7 +478,7 @@ const KB_ADMIN_MAIN = {
         keyboard: [
             [{ text: '📋 Daftar Grup' }, { text: '🎯 Pilih Grup' }],
             [{ text: '➕ Buat Grup WA' }, { text: '📥 Import VCF' }],
-            [{ text: '🔴 Kick Menu' }, { text: '📡 Status' }],
+            [{ text: '🔴 Kick Menu' }, { text: '📊 Status' }],
             [{ text: '🔧 File Tools' }, { text: '📁 Admin File Manager' }],
             [{ text: '📋 Pending Payment' }, { text: '👥 User List' }],
             [{ text: '🚪 Logout WhatsApp' }]
@@ -570,92 +518,78 @@ async function requireAccess(ctx, next) {
     if (isAdmin(userId)) return next();
     const status = await getUserStatus(userId);
     if (status === 'regular' || status === 'trial') return next();
-    if (status === 'expired') {
-        return safeReply(ctx, `╔══════════════════════╗\n║  AKSES BERAKHIR\n╚══════════════════════╝\n\nPaket kamu sudah expired.\nPerpanjang sekarang!\n\nKetik /beli untuk lihat paket.`, { ...KB_LANDING });
-    }
-    if (status === 'trial_expired') {
-        return safeReply(ctx, `╔══════════════════════╗\n║  TRIAL BERAKHIR\n╚══════════════════════╝\n\nMasa trial kamu sudah habis.\nUpgrade ke paket reguler!\n\nKetik /beli untuk lihat paket.`, { ...KB_LANDING });
-    }
-    await safeReply(ctx, `╔══════════════════════╗\n║  AKSES DITOLAK\n╚══════════════════════╝\n\nBot ini berbayar.\n\n🎁 Coba gratis ${TRIAL_DURATION_HOURS} jam\n💳 Atau langsung beli paket`, { ...KB_LANDING });
+    if (status === 'expired')
+        return safeReply(ctx, `Paket kamu sudah expired.\nKetik /beli untuk perpanjang.`, { ...KB_LANDING });
+    if (status === 'trial_expired')
+        return safeReply(ctx, `Trial kamu sudah habis.\nKetik /beli untuk upgrade.`, { ...KB_LANDING });
+    await safeReply(ctx, `Bot ini berbayar.\n\n🎁 Coba gratis ${TRIAL_DURATION_HOURS} jam\n💳 Atau beli paket via /beli`, { ...KB_LANDING });
 }
 
-// ========== FILE HANDLERS (NO-SPAM VERSION) ==========
+// ========================================
+// ========== FILE TOOL HANDLERS ==========
+// ========================================
 
-// --- 1. TXT to VCF (Multiple) ---
+// --- 1. TXT → VCF (Multiple) ---
 async function handleCvTxtToVcfStart(ctx, userId) {
     setState(userId, { mode: 'cv_txt_to_vcf', files: [], fileNames: [], collecting: true });
-    await safeReply(ctx, `📥 *Mengumpulkan file TXT...*\n\nKirim file lain atau ketik /done`);
+    await safeReply(ctx, `📥 Mode TXT → VCF aktif.\n\nKirim file .txt satu per satu, lalu ketik /done setelah selesai.\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleCvTxtToVcfFile(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.txt';
-    if (!fname.toLowerCase().endsWith('.txt')) {
+    if (!fname.toLowerCase().endsWith('.txt'))
         return safeReply(ctx, '⚠️ Hanya file .txt yang diterima.');
-    }
-    if (state.files.length >= MAX_FILES_PER_BATCH) {
+    if (state.files.length >= MAX_FILES_PER_BATCH)
         return safeReply(ctx, `❌ Maksimal ${MAX_FILES_PER_BATCH} file per batch.`);
-    }
     try {
-        const buffer      = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        const textContent = buffer.toString('utf-8');
-        state.files.push({ name: fname, content: textContent });
-        state.fileNames = state.fileNames || [];
+        const buffer = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
+        state.files.push({ name: fname, content: buffer.toString('utf-8') });
         state.fileNames.push(fname);
         setState(userId, state);
+        await safeReply(ctx, `✅ File ke-${state.files.length} diterima: ${fname}\nKirim file lain atau ketik /done.`);
     } catch (err) {
         log('ERROR', 'CvTxtToVcf', err.message, err);
-        await safeReply(ctx, `❌ Error membaca file: ${err.message}`);
+        await safeReply(ctx, `❌ Error: ${err.message}`);
     }
 }
 
 async function finalizeCvTxtToVcf(ctx, userId, state) {
-    if (state.files.length === 0) {
-        clearState(userId);
-        return safeReply(ctx, '❌ Tidak ada file yang dikumpulkan.');
-    }
+    if (state.files.length === 0) { clearState(userId); return safeReply(ctx, '❌ Tidak ada file.'); }
     try {
-        const fileList = state.fileNames.map((f, i) => `${i+1}. ${f}`).join('\n');
-        await safeReply(ctx, `📥 *${state.files.length} file diterima:*\n\n${fileList}\n\n${'─'.repeat(30)}\n⏳ Memproses konversi...`);
-        
+        await safeReply(ctx, `⏳ Memproses ${state.files.length} file...`);
         const results = [];
         for (const file of state.files) {
-            const contacts    = parseTxtLines(file.content);
-            const baseName    = file.name.replace(/\.txt$/i, '');
-            const vcfContent  = generateVCF(contacts);
-            const vcfBuffer   = Buffer.from(vcfContent, 'utf-8');
-            await sendFile(ctx, vcfBuffer, `${baseName}.vcf`, `✅ ${file.name} → ${baseName}.vcf (${contacts.length} kontak)`);
-            results.push(`✅ ${file.name} → ${baseName}.vcf (${contacts.length} kontak)`);
+            const contacts   = parseTxtLines(file.content);
+            const baseName   = file.name.replace(/\.txt$/i, '');
+            const vcfContent = generateVCF(contacts);
+            await sendFile(ctx, Buffer.from(vcfContent, 'utf-8'), `${baseName}.vcf`, `✅ ${file.name} → ${baseName}.vcf (${contacts.length} kontak)`);
+            results.push(`✅ ${file.name} → ${contacts.length} kontak`);
         }
-        await safeReply(ctx, `📦 *HASIL KONVERSI*\n\n${results.join('\n')}\n\n📊 Total: ${state.files.length} file diproses`);
+        await safeReply(ctx, `📦 Selesai!\n${results.join('\n')}`);
     } catch (err) {
         log('ERROR', 'CvTxtToVcf', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
-    } finally {
-        clearState(userId);
-    }
+    } finally { clearState(userId); }
 }
 
-// --- 2. VCF to TXT (Multiple) ---
+// --- 2. VCF → TXT (Multiple) ---
 async function handleCvVcfToTxtStart(ctx, userId) {
     setState(userId, { mode: 'cv_vcf_to_txt', files: [], fileNames: [], collecting: true });
-    await safeReply(ctx, `📥 *Mengumpulkan file VCF...*\n\nKirim file lain atau ketik /done`);
+    await safeReply(ctx, `📥 Mode VCF → TXT aktif.\n\nKirim file .vcf satu per satu, lalu ketik /done.\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleCvVcfToTxtFile(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.vcf';
-    if (!fname.toLowerCase().endsWith('.vcf')) {
+    if (!fname.toLowerCase().endsWith('.vcf'))
         return safeReply(ctx, '⚠️ Hanya file .vcf yang diterima.');
-    }
-    if (state.files.length >= MAX_FILES_PER_BATCH) {
+    if (state.files.length >= MAX_FILES_PER_BATCH)
         return safeReply(ctx, `❌ Maksimal ${MAX_FILES_PER_BATCH} file per batch.`);
-    }
     try {
-        const buffer  = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        const vcfText = buffer.toString('utf-8');
-        state.files.push({ name: fname, content: vcfText });
-        state.fileNames = state.fileNames || [];
+        const buffer = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
+        state.files.push({ name: fname, content: buffer.toString('utf-8') });
         state.fileNames.push(fname);
         setState(userId, state);
+        await safeReply(ctx, `✅ File ke-${state.files.length} diterima: ${fname}\nKirim file lain atau ketik /done.`);
     } catch (err) {
         log('ERROR', 'CvVcfToTxt', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
@@ -663,57 +597,39 @@ async function handleCvVcfToTxtFile(ctx, userId, state, doc) {
 }
 
 async function finalizeCvVcfToTxt(ctx, userId, state) {
-    if (state.files.length === 0) {
-        clearState(userId);
-        return safeReply(ctx, '❌ Tidak ada file yang dikumpulkan.');
-    }
+    if (state.files.length === 0) { clearState(userId); return safeReply(ctx, '❌ Tidak ada file.'); }
     try {
-        const fileList = state.fileNames.map((f, i) => `${i+1}. ${f}`).join('\n');
-        await safeReply(ctx, `📥 *${state.files.length} file diterima:*\n\n${fileList}\n\n${'─'.repeat(30)}\n⏳ Memproses konversi...`);
-        
+        await safeReply(ctx, `⏳ Memproses ${state.files.length} file...`);
         const results = [];
         for (const file of state.files) {
             const contacts   = parseVCF(file.content);
             const baseName   = file.name.replace(/\.vcf$/i, '');
             const txtContent = contacts.map(c => c.phone).join('\n');
-            const txtBuffer  = Buffer.from(txtContent, 'utf-8');
-            await sendFile(ctx, txtBuffer, `${baseName}.txt`, `✅ ${file.name} → ${baseName}.txt (${contacts.length} nomor)`);
-            results.push(`✅ ${file.name} → ${baseName}.txt (${contacts.length} nomor)`);
+            await sendFile(ctx, Buffer.from(txtContent, 'utf-8'), `${baseName}.txt`, `✅ ${file.name} → ${baseName}.txt (${contacts.length} nomor)`);
+            results.push(`✅ ${file.name} → ${contacts.length} nomor`);
         }
-        await safeReply(ctx, `📦 *HASIL KONVERSI*\n\n${results.join('\n')}\n\n📊 Total: ${state.files.length} file diproses`);
+        await safeReply(ctx, `📦 Selesai!\n${results.join('\n')}`);
     } catch (err) {
         log('ERROR', 'CvVcfToTxt', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
-    } finally {
-        clearState(userId);
-    }
+    } finally { clearState(userId); }
 }
 
-// --- 3. XLSX to VCF ---
+// --- 3. XLSX → VCF ---
 async function handleCvXlsxToVcfStart(ctx, userId) {
-    if (!XLSX) {
-        return safeReply(ctx, '❌ Fitur XLSX → VCF memerlukan package xlsx.\n\nAdmin perlu install:\n`npm install xlsx`');
-    }
+    if (!XLSX) return safeReply(ctx, '❌ Fitur XLSX → VCF memerlukan package xlsx.\nAdmin perlu jalankan: npm install xlsx');
     setState(userId, { mode: 'cv_xlsx_to_vcf', waiting: true });
-    await safeReply(ctx, `📊 *XLSX → VCF*\n\nSilakan kirim file .xlsx.\nBot akan memindai semua cell dan mengambil nomor telepon yang valid.\n\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `📊 XLSX → VCF\n\nKirim file .xlsx.\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleCvXlsxToVcfFile(ctx, userId, state, doc) {
-    if (!XLSX) {
-        return safeReply(ctx, '❌ Package xlsx tidak terinstall. Hubungi admin.');
-    }
-    
+    if (!XLSX) return safeReply(ctx, '❌ Package xlsx tidak terinstall.');
     const fname = doc.file_name || 'file.xlsx';
-    if (!fname.toLowerCase().endsWith('.xlsx')) {
-        return safeReply(ctx, '⚠️ Hanya file .xlsx yang diterima.');
-    }
+    if (!fname.toLowerCase().endsWith('.xlsx')) return safeReply(ctx, '⚠️ Hanya file .xlsx.');
     try {
         const buffer   = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
         const workbook = XLSX.read(buffer, { type: 'buffer' });
-
-        let allNumbers = [];
-        let totalCells = 0;
-
+        let allNumbers = [], totalCells = 0;
         for (const sheetName of workbook.SheetNames) {
             const sheet = workbook.Sheets[sheetName];
             const data  = XLSX.utils.sheet_to_json(sheet, { header: 1 });
@@ -728,23 +644,19 @@ async function handleCvXlsxToVcfFile(ctx, userId, state, doc) {
                 }
             }
         }
-
-        const seen          = new Set();
+        const seen = new Set();
         const uniqueNumbers = [];
-        let dupCount        = 0;
+        let dupCount = 0;
         for (const num of allNumbers) {
             if (seen.has(num)) { dupCount++; continue; }
             seen.add(num);
             uniqueNumbers.push(num);
         }
-
         const contacts   = uniqueNumbers.map(num => ({ name: `Kontak ${num}`, phone: num }));
         const vcfContent = generateVCF(contacts);
         const baseName   = fname.replace(/\.xlsx$/i, '');
-        const vcfBuffer  = Buffer.from(vcfContent, 'utf-8');
-
-        const infoText = `📊 HASIL KONVERSI XLSX → VCF\n${'─'.repeat(30)}\n📋 File : ${fname}\n🔢 Cell dipindai : ${totalCells}\n📞 Nomor ditemukan : ${allNumbers.length}\n🚫 Duplikat : ${dupCount}\n✅ Kontak unik : ${uniqueNumbers.length}`;
-        await sendFile(ctx, vcfBuffer, `${baseName}.vcf`, infoText);
+        const infoText   = `📊 HASIL KONVERSI XLSX → VCF\n${'─'.repeat(30)}\n📋 File: ${fname}\n🔢 Cell dipindai: ${totalCells}\n📞 Nomor ditemukan: ${allNumbers.length}\n🚫 Duplikat: ${dupCount}\n✅ Kontak unik: ${uniqueNumbers.length}`;
+        await sendFile(ctx, Buffer.from(vcfContent, 'utf-8'), `${baseName}.vcf`, infoText);
         clearState(userId);
     } catch (err) {
         log('ERROR', 'CvXlsxToVcf', err.message, err);
@@ -756,27 +668,19 @@ async function handleCvXlsxToVcfFile(ctx, userId, state, doc) {
 // --- 4. TXT2VCF Auto-Detect ---
 async function handleTxt2VcfStart(ctx, userId) {
     setState(userId, { mode: 'txt2vcf', waiting: true });
-    await safeReply(ctx, `📝 *TXT2VCF Auto-Detect*\n\nKirim file .txt untuk langsung dikonversi menjadi VCF.\n\nFormat yang didukung:\n• Nomor di depan: \`08123 Nama\`\n• Nama di depan: \`Nama 08123\`\n• Separator: \`Nama|08123\` atau \`Nama,08123\`\n• Hanya nomor: \`081234567890\`\n\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `📝 TXT2VCF Auto-Detect\n\nKirim file .txt untuk dikonversi.\nFormat: nomor saja, nama|nomor, atau nomor nama.\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleTxt2VcfFile(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.txt';
-    if (!fname.toLowerCase().endsWith('.txt')) {
-        return safeReply(ctx, '⚠️ Hanya file .txt yang diterima.');
-    }
+    if (!fname.toLowerCase().endsWith('.txt')) return safeReply(ctx, '⚠️ Hanya file .txt.');
     try {
-        const buffer      = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        const textContent = buffer.toString('utf-8');
-        const contacts    = parseTxtLines(textContent);
-
-        if (contacts.length === 0) {
-            return safeReply(ctx, '❌ Tidak ada nomor telepon valid yang ditemukan.');
-        }
-
+        const buffer   = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
+        const contacts = parseTxtLines(buffer.toString('utf-8'));
+        if (contacts.length === 0) return safeReply(ctx, '❌ Tidak ada nomor valid ditemukan.');
         const baseName   = fname.replace(/\.txt$/i, '');
         const vcfContent = generateVCF(contacts);
-        const vcfBuffer  = Buffer.from(vcfContent, 'utf-8');
-        await sendFile(ctx, vcfBuffer, `${baseName}.vcf`, `✅ ${fname} → ${baseName}.vcf\n👤 ${contacts.length} kontak unik`);
+        await sendFile(ctx, Buffer.from(vcfContent, 'utf-8'), `${baseName}.vcf`, `✅ ${fname} → ${baseName}.vcf\n👤 ${contacts.length} kontak unik`);
         clearState(userId);
     } catch (err) {
         log('ERROR', 'Txt2Vcf', err.message, err);
@@ -788,24 +692,19 @@ async function handleTxt2VcfFile(ctx, userId, state, doc) {
 // --- 5. Gabung TXT ---
 async function handleGabungTxtStart(ctx, userId) {
     setState(userId, { mode: 'gabungtxt', files: [], fileNames: [], collecting: true });
-    await safeReply(ctx, `📥 *Mengumpulkan file TXT...*\n\nKirim file lain atau ketik /done`);
+    await safeReply(ctx, `📥 Mode Gabung TXT aktif.\n\nKirim minimal 2 file .txt, lalu ketik /done.\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleGabungTxtFile(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.txt';
-    if (!fname.toLowerCase().endsWith('.txt')) {
-        return safeReply(ctx, '⚠️ Hanya file .txt yang diterima.');
-    }
-    if (state.files.length >= MAX_FILES_PER_BATCH) {
-        return safeReply(ctx, `❌ Maksimal ${MAX_FILES_PER_BATCH} file per batch.`);
-    }
+    if (!fname.toLowerCase().endsWith('.txt')) return safeReply(ctx, '⚠️ Hanya file .txt.');
+    if (state.files.length >= MAX_FILES_PER_BATCH) return safeReply(ctx, `❌ Maksimal ${MAX_FILES_PER_BATCH} file.`);
     try {
-        const buffer      = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        const textContent = buffer.toString('utf-8');
-        state.files.push({ name: fname, content: textContent });
-        state.fileNames = state.fileNames || [];
+        const buffer = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
+        state.files.push({ name: fname, content: buffer.toString('utf-8') });
         state.fileNames.push(fname);
         setState(userId, state);
+        await safeReply(ctx, `✅ File ke-${state.files.length} diterima: ${fname}\nKirim file lain atau ketik /done.`);
     } catch (err) {
         log('ERROR', 'GabungTxt', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
@@ -813,14 +712,9 @@ async function handleGabungTxtFile(ctx, userId, state, doc) {
 }
 
 async function finalizeGabungTxt(ctx, userId, state) {
-    if (state.files.length < 2) {
-        clearState(userId);
-        return safeReply(ctx, '❌ Minimal 2 file untuk digabung.');
-    }
+    if (state.files.length < 2) { clearState(userId); return safeReply(ctx, '❌ Minimal 2 file untuk digabung.'); }
     try {
-        const fileList = state.fileNames.map((f, i) => `${i+1}. ${f}`).join('\n');
-        await safeReply(ctx, `📥 *${state.files.length} file diterima:*\n\n${fileList}\n\n${'─'.repeat(30)}\n⏳ Memproses penggabungan...`);
-        
+        await safeReply(ctx, `⏳ Menggabungkan ${state.files.length} file...`);
         const allLines = [];
         let totalLines = 0;
         for (const file of state.files) {
@@ -828,7 +722,6 @@ async function finalizeGabungTxt(ctx, userId, state) {
             totalLines += lines.length;
             allLines.push(...lines);
         }
-
         const seenLines = new Set();
         const merged    = [];
         for (const line of allLines) {
@@ -837,13 +730,9 @@ async function finalizeGabungTxt(ctx, userId, state) {
             seenLines.add(normalized);
             merged.push(line);
         }
-
-        const dupCount   = allLines.length - merged.length;
-        const txtContent = merged.join('\n');
-        const txtBuffer  = Buffer.from(txtContent, 'utf-8');
-
-        const infoText = `📄 HASIL GABUNG TXT\n${'─'.repeat(30)}\n📁 File digabung : ${state.files.length}\n📝 Total baris : ${totalLines}\n🚫 Duplikat : ${dupCount}\n✅ Baris unik : ${merged.length}`;
-        await sendFile(ctx, txtBuffer, 'gabungan.txt', infoText);
+        const dupCount  = totalLines - merged.length;
+        const infoText  = `📄 HASIL GABUNG TXT\n${'─'.repeat(30)}\n📁 File digabung: ${state.files.length}\n📝 Total baris: ${totalLines}\n🚫 Duplikat: ${dupCount}\n✅ Baris unik: ${merged.length}`;
+        await sendFile(ctx, Buffer.from(merged.join('\n'), 'utf-8'), 'gabungan.txt', infoText);
         clearState(userId);
     } catch (err) {
         log('ERROR', 'GabungTxt', err.message, err);
@@ -855,24 +744,19 @@ async function finalizeGabungTxt(ctx, userId, state) {
 // --- 6. Gabung VCF ---
 async function handleGabungVcfStart(ctx, userId) {
     setState(userId, { mode: 'gabungvcf', files: [], fileNames: [], collecting: true });
-    await safeReply(ctx, `📥 *Mengumpulkan file VCF...*\n\nKirim file lain atau ketik /done`);
+    await safeReply(ctx, `📥 Mode Gabung VCF aktif.\n\nKirim minimal 2 file .vcf, lalu ketik /done.\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleGabungVcfFile(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.vcf';
-    if (!fname.toLowerCase().endsWith('.vcf')) {
-        return safeReply(ctx, '⚠️ Hanya file .vcf yang diterima.');
-    }
-    if (state.files.length >= MAX_FILES_PER_BATCH) {
-        return safeReply(ctx, `❌ Maksimal ${MAX_FILES_PER_BATCH} file per batch.`);
-    }
+    if (!fname.toLowerCase().endsWith('.vcf')) return safeReply(ctx, '⚠️ Hanya file .vcf.');
+    if (state.files.length >= MAX_FILES_PER_BATCH) return safeReply(ctx, `❌ Maksimal ${MAX_FILES_PER_BATCH} file.`);
     try {
-        const buffer  = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        const vcfText = buffer.toString('utf-8');
-        state.files.push({ name: fname, content: vcfText });
-        state.fileNames = state.fileNames || [];
+        const buffer = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
+        state.files.push({ name: fname, content: buffer.toString('utf-8') });
         state.fileNames.push(fname);
         setState(userId, state);
+        await safeReply(ctx, `✅ File ke-${state.files.length} diterima: ${fname}\nKirim file lain atau ketik /done.`);
     } catch (err) {
         log('ERROR', 'GabungVcf', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
@@ -880,19 +764,12 @@ async function handleGabungVcfFile(ctx, userId, state, doc) {
 }
 
 async function finalizeGabungVcf(ctx, userId, state) {
-    if (state.files.length < 2) {
-        clearState(userId);
-        return safeReply(ctx, '❌ Minimal 2 file untuk digabung.');
-    }
+    if (state.files.length < 2) { clearState(userId); return safeReply(ctx, '❌ Minimal 2 file untuk digabung.'); }
     try {
-        const fileList = state.fileNames.map((f, i) => `${i+1}. ${f}`).join('\n');
-        await safeReply(ctx, `📥 *${state.files.length} file diterima:*\n\n${fileList}\n\n${'─'.repeat(30)}\n⏳ Memproses penggabungan...`);
-        
+        await safeReply(ctx, `⏳ Menggabungkan ${state.files.length} file...`);
         const allContacts = [];
         const seen        = new Set();
-        let totalContacts = 0;
-        let dupCount      = 0;
-
+        let totalContacts = 0, dupCount = 0;
         for (const file of state.files) {
             const contacts = parseVCF(file.content);
             totalContacts += contacts.length;
@@ -902,12 +779,9 @@ async function finalizeGabungVcf(ctx, userId, state) {
                 allContacts.push(c);
             }
         }
-
         const vcfContent = generateVCF(allContacts);
-        const vcfBuffer  = Buffer.from(vcfContent, 'utf-8');
-
-        const infoText = `📄 HASIL GABUNG VCF\n${'─'.repeat(30)}\n📁 File digabung : ${state.files.length}\n📝 Total kontak : ${totalContacts}\n🚫 Duplikat : ${dupCount}\n✅ Kontak unik : ${allContacts.length}`;
-        await sendFile(ctx, vcfBuffer, 'gabungan.vcf', infoText);
+        const infoText   = `📄 HASIL GABUNG VCF\n${'─'.repeat(30)}\n📁 File digabung: ${state.files.length}\n📝 Total kontak: ${totalContacts}\n🚫 Duplikat: ${dupCount}\n✅ Kontak unik: ${allContacts.length}`;
+        await sendFile(ctx, Buffer.from(vcfContent, 'utf-8'), 'gabungan.vcf', infoText);
         clearState(userId);
     } catch (err) {
         log('ERROR', 'GabungVcf', err.message, err);
@@ -916,35 +790,27 @@ async function finalizeGabungVcf(ctx, userId, state) {
     }
 }
 
-// --- 7. Pecah VCF (bagian) ---
+// --- 7. Pecah VCF (per bagian) ---
 async function handlePecahFileStart(ctx, userId) {
     setState(userId, { mode: 'pecahfile', waiting: true });
-    await safeReply(ctx, `✂️ *PECAH VCF (BAGIAN)*\n\nSilakan kirim file .vcf yang ingin dipecah.\n\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `✂️ Pecah VCF (per bagian)\n\nKirim file .vcf yang ingin dipecah.\nKetik /batal untuk membatalkan.`);
 }
 
 async function handlePecahFileVcf(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.vcf';
-    if (!fname.toLowerCase().endsWith('.vcf')) {
-        return safeReply(ctx, '⚠️ Hanya file .vcf yang diterima.');
-    }
+    if (!fname.toLowerCase().endsWith('.vcf')) return safeReply(ctx, '⚠️ Hanya file .vcf.');
     try {
         const buffer   = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        const vcfText  = buffer.toString('utf-8');
-        const contacts = parseVCF(vcfText);
-
-        if (contacts.length < 2) {
-            return safeReply(ctx, '❌ Minimal 2 kontak untuk dipecah.');
-        }
-
+        const contacts = parseVCF(buffer.toString('utf-8'));
+        if (contacts.length < 2) return safeReply(ctx, '❌ Minimal 2 kontak untuk dipecah.');
         const baseName = fname.replace(/\.vcf$/i, '');
         const keyboard = Markup.inlineKeyboard([
-            [Markup.button.callback('✂️ 2 Bagian', 'pecahfile_2'), Markup.button.callback('✂️ 3 Bagian', 'pecahfile_3')],
-            [Markup.button.callback('✂️ 4 Bagian', 'pecahfile_4'), Markup.button.callback('✂️ 5 Bagian', 'pecahfile_5')],
+            [Markup.button.callback('2 Bagian', 'pecahfile_2'), Markup.button.callback('3 Bagian', 'pecahfile_3')],
+            [Markup.button.callback('4 Bagian', 'pecahfile_4'), Markup.button.callback('5 Bagian', 'pecahfile_5')],
             [Markup.button.callback('❌ Batal', 'pecahfile_cancel')],
         ]);
-
         setState(userId, { mode: 'pecahfile', phase: 'choose_parts', contacts, baseName });
-        await safeReply(ctx, `📋 *File:* ${fname}\n📊 *Total kontak:* ${contacts.length}\n\nPilih jumlah bagian:`, { ...keyboard });
+        await safeReply(ctx, `📋 File: ${fname}\n📊 Total kontak: ${contacts.length}\n\nPilih jumlah bagian:`, { ...keyboard });
     } catch (err) {
         log('ERROR', 'PecahFile', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
@@ -952,42 +818,31 @@ async function handlePecahFileVcf(ctx, userId, state, doc) {
     }
 }
 
-// --- 8. Pecah VCF (jumlah kontak) ---
+// --- 8. Pecah VCF (per jumlah kontak) ---
 async function handlePecahCtcStart(ctx, userId, jumlah) {
     const count = Math.max(1, Math.min(10000, parseInt(jumlah) || 100));
     setState(userId, { mode: 'pecahctc', countPerFile: count, waiting: true });
-    await safeReply(ctx, `✂️ *PECAH VCF (${count} kontak/file)*\n\nSilakan kirim file .vcf yang ingin dipecah.\n\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `✂️ Pecah VCF (${count} kontak/file)\n\nKirim file .vcf yang ingin dipecah.\nKetik /batal untuk membatalkan.`);
 }
 
 async function handlePecahCtcFile(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.vcf';
-    if (!fname.toLowerCase().endsWith('.vcf')) {
-        return safeReply(ctx, '⚠️ Hanya file .vcf yang diterima.');
-    }
+    if (!fname.toLowerCase().endsWith('.vcf')) return safeReply(ctx, '⚠️ Hanya file .vcf.');
     try {
-        const buffer      = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        const vcfText     = buffer.toString('utf-8');
-        const contacts    = parseVCF(vcfText);
-
-        if (contacts.length === 0) {
-            return safeReply(ctx, '❌ Tidak ada kontak valid.');
-        }
-
+        const buffer       = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
+        const contacts     = parseVCF(buffer.toString('utf-8'));
+        if (contacts.length === 0) return safeReply(ctx, '❌ Tidak ada kontak valid.');
         const countPerFile = state.countPerFile;
         const baseName     = fname.replace(/\.vcf$/i, '');
         const totalParts   = Math.ceil(contacts.length / countPerFile);
-
-        await safeReply(ctx, `📋 *File:* ${fname}\n📊 *Total kontak:* ${contacts.length}\n📏 *Per file:* ${countPerFile} kontak\n📁 *Menjadi:* ${totalParts} bagian\n\n⏳ Memproses...`);
-
+        await safeReply(ctx, `📋 File: ${fname}\n📊 Total kontak: ${contacts.length}\n📏 Per file: ${countPerFile}\n📁 Menjadi: ${totalParts} bagian\n\n⏳ Memproses...`);
         for (let i = 0; i < totalParts; i++) {
             const partContacts = contacts.slice(i * countPerFile, (i + 1) * countPerFile);
             const vcfContent   = generateVCF(partContacts);
-            const vcfBuffer    = Buffer.from(vcfContent, 'utf-8');
             const partNum      = String(i + 1).padStart(3, '0');
-            await sendFile(ctx, vcfBuffer, `${baseName}_${partNum}.vcf`, `📄 Bagian ${i + 1}/${totalParts}: ${partContacts.length} kontak`);
+            await sendFile(ctx, Buffer.from(vcfContent, 'utf-8'), `${baseName}_${partNum}.vcf`, `📄 Bagian ${i + 1}/${totalParts}: ${partContacts.length} kontak`);
         }
-
-        await safeReply(ctx, `✅ File berhasil dipecah menjadi ${totalParts} bagian\n📋 Total kontak: ${contacts.length}\n📏 Per file: ${countPerFile} kontak`);
+        await safeReply(ctx, `✅ Selesai! Dipecah menjadi ${totalParts} bagian.`);
         clearState(userId);
     } catch (err) {
         log('ERROR', 'PecahCtc', err.message, err);
@@ -999,25 +854,18 @@ async function handlePecahCtcFile(ctx, userId, state, doc) {
 // --- 9. Tambah Kontak ---
 async function handleAddCtcStart(ctx, userId) {
     setState(userId, { mode: 'addctc', phase: 'waiting_vcf' });
-    await safeReply(ctx, `➕ *TAMBAH KONTAK VCF*\n\nSilakan kirim file .vcf yang ingin ditambahi kontak.\n\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `➕ Tambah Kontak VCF\n\nKirim file .vcf yang ingin ditambahi kontak.\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleAddCtcFile(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.vcf';
-    if (!fname.toLowerCase().endsWith('.vcf')) {
-        return safeReply(ctx, '⚠️ Hanya file .vcf yang diterima.');
-    }
+    if (!fname.toLowerCase().endsWith('.vcf')) return safeReply(ctx, '⚠️ Hanya file .vcf.');
     try {
         const buffer   = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        const vcfText  = buffer.toString('utf-8');
-        const contacts = parseVCF(vcfText);
-
-        if (contacts.length === 0) {
-            return safeReply(ctx, '❌ Tidak ada kontak valid dalam file.');
-        }
-
+        const contacts = parseVCF(buffer.toString('utf-8'));
+        if (contacts.length === 0) return safeReply(ctx, '❌ Tidak ada kontak valid.');
         setState(userId, { mode: 'addctc', phase: 'waiting_contacts', existingContacts: contacts, fileName: fname });
-        await safeReply(ctx, `📋 *File:* ${fname}\n👤 *Kontak saat ini:* ${contacts.length}\n\n${'─'.repeat(30)}\nSilakan kirim kontak tambahan dalam format teks (satu per baris):\n\nContoh:\nNama Baru|081234567890\n081987654321\n+628123456789|Nama Lain\n\n${'─'.repeat(30)}\nKetik /done jika selesai atau /batal untuk batal.`);
+        await safeReply(ctx, `📋 File: ${fname}\n👤 Kontak saat ini: ${contacts.length}\n\nKirim kontak tambahan (satu per baris):\n\nContoh:\nNama Baru|081234567890\n081987654321\n+628123456789|Nama Lain\n\nKetik /done setelah selesai atau /batal untuk batal.`);
     } catch (err) {
         log('ERROR', 'AddCtc', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
@@ -1028,34 +876,21 @@ async function handleAddCtcFile(ctx, userId, state, doc) {
 // --- 10. Hapus Kontak ---
 async function handleDelCtcStart(ctx, userId) {
     setState(userId, { mode: 'delctc', phase: 'waiting_vcf' });
-    await safeReply(ctx, `➖ *HAPUS KONTAK VCF*\n\nSilakan kirim file .vcf yang ingin dihapus kontaknya.\n\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `➖ Hapus Kontak VCF\n\nKirim file .vcf yang ingin dihapus kontaknya.\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleDelCtcFile(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.vcf';
-    if (!fname.toLowerCase().endsWith('.vcf')) {
-        return safeReply(ctx, '⚠️ Hanya file .vcf yang diterima.');
-    }
+    if (!fname.toLowerCase().endsWith('.vcf')) return safeReply(ctx, '⚠️ Hanya file .vcf.');
     try {
         const buffer   = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        const vcfText  = buffer.toString('utf-8');
-        const contacts = parseVCF(vcfText);
-
-        if (contacts.length === 0) {
-            return safeReply(ctx, '❌ Tidak ada kontak valid dalam file.');
-        }
-
-        let preview = `📋 *DAFTAR KONTAK*\n${'─'.repeat(30)}\n📇 *File:* ${fname}\n👤 *Total:* ${contacts.length} kontak\n\n`;
-        const maxShow = Math.min(30, contacts.length);
-        for (let i = 0; i < maxShow; i++) {
-            const c = contacts[i];
-            preview += `${i + 1}. ${c.name} → ${c.phone}\n`;
-        }
-        if (contacts.length > 30) {
-            preview += `\n... dan ${contacts.length - 30} kontak lainnya`;
-        }
-        preview += `\n${'─'.repeat(30)}\nKetik nomor urut yang ingin dihapus:\nFormat: 1,3,5-8,10\n\nKetik /done jika selesai atau /batal untuk batal.`;
-
+        const contacts = parseVCF(buffer.toString('utf-8'));
+        if (contacts.length === 0) return safeReply(ctx, '❌ Tidak ada kontak valid.');
+        let preview    = `📋 DAFTAR KONTAK\n📇 File: ${fname}\n👤 Total: ${contacts.length}\n\n`;
+        const maxShow  = Math.min(30, contacts.length);
+        for (let i = 0; i < maxShow; i++) preview += `${i + 1}. ${contacts[i].name} → ${contacts[i].phone}\n`;
+        if (contacts.length > 30) preview += `\n... dan ${contacts.length - 30} kontak lainnya`;
+        preview += `\n\nKetik nomor urut yang ingin dihapus:\nFormat: 1,3,5-8,10\n\nKetik /batal untuk batal.`;
         setState(userId, { mode: 'delctc', phase: 'waiting_input', contacts, fileName: fname });
         await safeReply(ctx, preview);
     } catch (err) {
@@ -1068,33 +903,22 @@ async function handleDelCtcFile(ctx, userId, state, doc) {
 // --- 11. Hitung Kontak ---
 async function handleHitungCtcStart(ctx, userId) {
     setState(userId, { mode: 'hitungctc', waiting: true });
-    await safeReply(ctx, `🔢 *HITUNG KONTAK VCF*\n\nSilakan kirim file .vcf yang ingin dihitung.\n\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `🔢 Hitung Kontak VCF\n\nKirim file .vcf untuk dihitung.\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleHitungCtcFile(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.vcf';
-    if (!fname.toLowerCase().endsWith('.vcf')) {
-        return safeReply(ctx, '⚠️ Hanya file .vcf yang diterima.');
-    }
+    if (!fname.toLowerCase().endsWith('.vcf')) return safeReply(ctx, '⚠️ Hanya file .vcf.');
     try {
         const buffer   = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        const vcfText  = buffer.toString('utf-8');
-        const contacts = parseVCF(vcfText);
-
-        let withName    = 0;
-        let withoutName = 0;
+        const contacts = parseVCF(buffer.toString('utf-8'));
+        let withName = 0, withoutName = 0, dupCount = 0;
         const seenPhone = new Set();
-        let dupCount    = 0;
-
         for (const c of contacts) {
-            if (c.name && c.name !== 'Tanpa Nama') withName++;
-            else withoutName++;
-            if (seenPhone.has(c.phone)) dupCount++;
-            else seenPhone.add(c.phone);
+            if (c.name && c.name !== 'Tanpa Nama') withName++; else withoutName++;
+            if (seenPhone.has(c.phone)) dupCount++; else seenPhone.add(c.phone);
         }
-
-        const infoText = `🔢 *HASIL HITUNG KONTAK VCF*\n${'─'.repeat(30)}\n📇 File : ${fname}\n👤 Total kontak : ${contacts.length}\n✅ Punya nama : ${withName}\n❓ Tanpa nama : ${withoutName}\n📞 Nomor unik : ${seenPhone.size}\n🚫 Nomor duplikat : ${dupCount}`;
-        await safeReply(ctx, infoText);
+        await safeReply(ctx, `🔢 HASIL HITUNG KONTAK VCF\n${'─'.repeat(30)}\n📇 File: ${fname}\n👤 Total kontak: ${contacts.length}\n✅ Punya nama: ${withName}\n❓ Tanpa nama: ${withoutName}\n📞 Nomor unik: ${seenPhone.size}\n🚫 Nomor duplikat: ${dupCount}`);
         clearState(userId);
     } catch (err) {
         log('ERROR', 'HitungCtc', err.message, err);
@@ -1106,41 +930,27 @@ async function handleHitungCtcFile(ctx, userId, state, doc) {
 // --- 12. Rename Kontak ---
 async function handleRenamectcStart(ctx, userId) {
     setState(userId, { mode: 'renamectc', phase: 'waiting_vcf' });
-    await safeReply(ctx, `✏️ *RENAME KONTAK VCF*\n\nSilakan kirim file .vcf yang ingin direname kontaknya.\n\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `✏️ Rename Kontak VCF\n\nKirim file .vcf yang ingin direname.\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleRenamectcFile(ctx, userId, state, doc) {
     const fname = doc.file_name || 'file.vcf';
-    if (!fname.toLowerCase().endsWith('.vcf')) {
-        return safeReply(ctx, '⚠️ Hanya file .vcf yang diterima.');
-    }
+    if (!fname.toLowerCase().endsWith('.vcf')) return safeReply(ctx, '⚠️ Hanya file .vcf.');
     try {
         const buffer   = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        const vcfText  = buffer.toString('utf-8');
-        const contacts = parseVCF(vcfText);
-
-        if (contacts.length === 0) {
-            return safeReply(ctx, '❌ Tidak ada kontak valid dalam file.');
-        }
-
-        let preview = `📋 *PREVIEW KONTAK*\n${'─'.repeat(30)}\n📇 *File:* ${fname}\n👤 *Total:* ${contacts.length} kontak\n\n`;
-        contacts.slice(0, 5).forEach((c, i) => {
-            preview += `${i + 1}. ${c.name} → ${c.phone}\n`;
-        });
-        if (contacts.length > 5) {
-            preview += `\n... dan ${contacts.length - 5} kontak lainnya`;
-        }
-        preview += `\n${'─'.repeat(30)}\nPilih metode rename:`;
-
+        const contacts = parseVCF(buffer.toString('utf-8'));
+        if (contacts.length === 0) return safeReply(ctx, '❌ Tidak ada kontak valid.');
+        let preview = `📋 PREVIEW KONTAK\n📇 File: ${fname}\n👤 Total: ${contacts.length}\n\n`;
+        contacts.slice(0, 5).forEach((c, i) => { preview += `${i + 1}. ${c.name} → ${c.phone}\n`; });
+        if (contacts.length > 5) preview += `\n... dan ${contacts.length - 5} lainnya`;
         const keyboard = Markup.inlineKeyboard([
             [Markup.button.callback('➕ Tambah Prefix', 'rename_prefix')],
             [Markup.button.callback('➕ Tambah Suffix', 'rename_suffix')],
             [Markup.button.callback('🔢 Ganti + Nomor Urut', 'rename_numbered')],
             [Markup.button.callback('❌ Batal', 'rename_cancel')],
         ]);
-
         setState(userId, { mode: 'renamectc', phase: 'choose_method', contacts, fileName: fname });
-        await safeReply(ctx, preview, { ...keyboard });
+        await safeReply(ctx, preview + '\n\nPilih metode rename:', { ...keyboard });
     } catch (err) {
         log('ERROR', 'Renamectc', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
@@ -1150,28 +960,23 @@ async function handleRenamectcFile(ctx, userId, state, doc) {
 
 // --- 13. Rename File ---
 async function handleRenameFileStart(ctx, userId, newName) {
-    if (!newName || newName.trim().length === 0) {
-        return safeReply(ctx, `Format: /renamefile [nama_baru]\n\nContoh: /renamefile arisan_baru`);
-    }
-    const invalidChars = /[\/\\:*?"<>|]/;
-    if (invalidChars.test(newName)) {
-        return safeReply(ctx, `❌ Nama file tidak boleh mengandung karakter: / \\ : * ? " < > |`);
-    }
-    if (newName.length > 100) {
+    if (!newName || !newName.trim())
+        return safeReply(ctx, `Format: /renamefile [nama_baru]\nContoh: /renamefile arisan_baru`);
+    if (/[\/\\:*?"<>|]/.test(newName))
+        return safeReply(ctx, `❌ Nama file tidak boleh mengandung: / \\ : * ? " < > |`);
+    if (newName.length > 100)
         return safeReply(ctx, `❌ Nama file maksimal 100 karakter.`);
-    }
-    const trimmedName = newName.trim();
-    setState(userId, { mode: 'renamefile', newName: trimmedName, waiting: true });
-    await safeReply(ctx, `✏️ *RENAME FILE*\n\nSilakan kirim file yang ingin diganti namanya.\nNama baru: ${trimmedName} (ekstensi akan dipertahankan)\n\nKetik /batal untuk membatalkan.`);
+    setState(userId, { mode: 'renamefile', newName: newName.trim(), waiting: true });
+    await safeReply(ctx, `✏️ Rename File\n\nKirim file yang ingin diganti namanya.\nNama baru: ${newName.trim()} (ekstensi dipertahankan)\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleRenameFile(ctx, userId, state, doc) {
-    const fname      = doc.file_name || 'file';
-    const ext        = path.extname(fname) || '';
+    const fname       = doc.file_name || 'file';
+    const ext         = path.extname(fname) || '';
     const newFileName = `${state.newName}${ext}`;
     try {
         const buffer = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        await sendFile(ctx, buffer, safeFilename(newFileName), `✅ File: ${fname}\n→ ${newFileName}`);
+        await sendFile(ctx, buffer, safeFilename(newFileName), `✅ ${fname} → ${newFileName}`);
         clearState(userId);
     } catch (err) {
         log('ERROR', 'RenameFile', err.message, err);
@@ -1183,62 +988,53 @@ async function handleRenameFile(ctx, userId, state, doc) {
 // --- 14. Pesan ke TXT ---
 async function handleTotxtStart(ctx, userId) {
     setState(userId, { mode: 'totxt', messages: [], active: true });
-    await safeReply(ctx, `📄 *PESAN KE TXT*\n\nMode pengumpulan pesan aktif.\nSetiap pesan teks yang kamu kirim akan disimpan.\n\nKetik /done untuk generate file TXT.\n\nMaks 500 pesan.\n\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `📄 Mode pengumpulan pesan aktif.\n\nSetiap pesan teks yang kamu kirim akan disimpan.\nMaks 500 pesan.\n\nKetik /done untuk generate file TXT.\nKetik /batal untuk membatalkan.`);
 }
 
 // --- 15. Rekap Group ---
 async function handleRekapGroup(ctx, userId) {
     setState(userId, { mode: 'rekapgroup', phase: 'waiting_photo' });
-    await safeReply(ctx, `📸 *Rekap Grup*\n\nSilakan kirim foto/screenshot info grup WhatsApp.\nAtau kirim foto dengan caption format:\nNamaGrup|JumlahMember\n\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `📸 Rekap Grup\n\nKirim foto screenshot info grup WhatsApp.\nAtau kirim foto dengan caption format:\nNamaGrup|JumlahMember\n\nKetik /batal untuk membatalkan.`);
 }
 
 // --- 16. Admin File Manager ---
 async function handleCvAdminFile(ctx, userId) {
-    if (!isAdmin(userId)) {
-        return safeReply(ctx, '⛔ Akses ditolak. Hanya admin.');
-    }
+    if (!isAdmin(userId)) return safeReply(ctx, '⛔ Akses ditolak. Hanya admin.');
     const keyboard = Markup.inlineKeyboard([
         [Markup.button.callback('📤 Upload File', 'adminfile_upload')],
         [Markup.button.callback('📂 Lihat File', 'adminfile_list')],
         [Markup.button.callback('🗑️ Hapus File', 'adminfile_delete')],
         [Markup.button.callback('📥 Download File', 'adminfile_download')],
     ]);
-    await safeReply(ctx, `📁 *ADMIN FILE MANAGER*\n\nPilih aksi:`, { ...keyboard });
+    await safeReply(ctx, `📁 ADMIN FILE MANAGER\n\nPilih aksi:`, { ...keyboard });
 }
 
 async function handleAdminFileUpload(ctx, userId) {
     setState(userId, { mode: 'cvadminfile_upload', waiting: true });
-    await safeReply(ctx, `📤 Silakan kirim file yang ingin diupload.\n\nKetik /batal untuk membatalkan.`);
+    await safeReply(ctx, `📤 Kirim file yang ingin diupload.\nKetik /batal untuk membatalkan.`);
 }
 
 async function handleAdminFileUploadFile(ctx, userId, state, doc) {
     const fname = safeFilename(doc.file_name || 'unnamed_file');
-
     try {
         const existingFiles = fs.readdirSync(ADMIN_FILES_DIR);
         if (existingFiles.length >= MAX_ADMIN_FILES) {
             clearState(userId);
-            return safeReply(ctx, `❌ Batas penyimpanan admin (${MAX_ADMIN_FILES} file) tercapai. Hapus beberapa file terlebih dahulu.`);
+            return safeReply(ctx, `❌ Batas penyimpanan (${MAX_ADMIN_FILES} file) tercapai. Hapus file dulu.`);
         }
-    } catch (err) {
-        log('ERROR', 'AdminFile', `Gagal baca dir: ${err.message}`);
-    }
-
+    } catch (err) { log('ERROR', 'AdminFile', `Gagal baca dir: ${err.message}`); }
     try {
-        const buffer   = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        let finalPath  = path.join(ADMIN_FILES_DIR, fname);
-
+        const buffer  = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
+        let finalPath = path.join(ADMIN_FILES_DIR, fname);
+        let finalName = fname;
         if (fs.existsSync(finalPath)) {
             const base    = path.parse(fname).name;
             const ext     = path.parse(fname).ext;
-            const newName = `${base}_${Date.now()}${ext}`;
-            finalPath     = path.join(ADMIN_FILES_DIR, newName);
-            fs.writeFileSync(finalPath, buffer);
-            await safeReply(ctx, `✅ File diupload sebagai: ${newName}`);
-        } else {
-            fs.writeFileSync(finalPath, buffer);
-            await safeReply(ctx, `✅ File berhasil diupload: ${fname}`);
+            finalName     = `${base}_${Date.now()}${ext}`;
+            finalPath     = path.join(ADMIN_FILES_DIR, finalName);
         }
+        fs.writeFileSync(finalPath, buffer);
+        await safeReply(ctx, `✅ File diupload: ${finalName}`);
         clearState(userId);
     } catch (err) {
         log('ERROR', 'AdminFile', err.message, err);
@@ -1247,65 +1043,159 @@ async function handleAdminFileUploadFile(ctx, userId, state, doc) {
     }
 }
 
-// ========== HANDLER LISTGC ==========
+// ==============================================
+// ========== WHATSAPP HANDLER LENGKAP ==========
+// ==============================================
+
+// List Grup WA
 async function handleListGc(ctx) {
     const userId = ctx.from.id;
-
     if (!isAdmin(userId)) {
         const status = await getUserStatus(userId);
-        if (!['regular', 'trial'].includes(status)) {
+        if (!['regular', 'trial'].includes(status))
             return safeReply(ctx, '❌ Akses ditolak. Fitur ini hanya untuk user premium/trial.');
-        }
     }
-
     const session = userSessions.get(userId);
-    if (!session || !session.loggedIn) {
-        return safeReply(ctx, '❌ Login dulu! Ketik /login');
-    }
-
+    if (!session || !session.loggedIn)
+        return safeReply(ctx, '❌ Kamu belum login WhatsApp.\nKetik atau tekan 🔑 Login WhatsApp.');
     try {
         const chats  = await session.sock.groupFetchAllParticipating();
         const groups = Object.values(chats);
         groups.sort((a, b) => (b.participants?.length || 0) - (a.participants?.length || 0));
-
-        if (groups.length <= 20) {
-            let listText = `📋 DAFTAR GRUP WA\n${'─'.repeat(30)}\n`;
-            groups.forEach((g, i) => {
-                listText += `${i + 1}. ${g.subject} - ${g.participants?.length || 0} member\n`;
-            });
-            listText += `${'─'.repeat(30)}\nTotal: ${groups.length} grup`;
-            await safeReply(ctx, listText);
+        if (groups.length === 0) return safeReply(ctx, '📋 Tidak ada grup yang ditemukan.');
+        let listText = `📋 DAFTAR GRUP WA\n${'─'.repeat(30)}\n`;
+        groups.forEach((g, i) => { listText += `${i + 1}. ${g.subject} - ${g.participants?.length || 0} member\n`; });
+        listText += `${'─'.repeat(30)}\nTotal: ${groups.length} grup`;
+        if (listText.length > 4000) {
+            await sendFile(ctx, Buffer.from(listText, 'utf-8'), 'list_grup.txt', `✅ Daftar ${groups.length} grup`);
         } else {
-            let listText = `DAFTAR GRUP WA\n\n`;
-            groups.forEach((g, i) => {
-                listText += `${i + 1}. ${g.subject} - ${g.participants?.length || 0} member\n`;
-            });
-            listText += `\nTotal: ${groups.length} grup`;
-            const txtBuffer = Buffer.from(listText, 'utf-8');
-            await sendFile(ctx, txtBuffer, 'list_grup.txt', `✅ Daftar ${groups.length} grup`);
+            await safeReply(ctx, listText);
         }
     } catch (err) {
+        log('ERROR', 'ListGC', err.message, err);
         await safeReply(ctx, `❌ Error: ${err.message}`);
     }
 }
 
-// ========== MIDDLEWARE: STATE TEXT HANDLER ==========
+// Pilih Grup
+async function handlePilihGrup(ctx) {
+    const userId  = ctx.from.id;
+    const session = userSessions.get(userId);
+    if (!session || !session.loggedIn)
+        return safeReply(ctx, '❌ Kamu belum login WhatsApp.\nKetik atau tekan 🔑 Login WhatsApp.');
+    try {
+        const chats  = await session.sock.groupFetchAllParticipating();
+        const groups = Object.values(chats);
+        groups.sort((a, b) => (b.participants?.length || 0) - (a.participants?.length || 0));
+        if (groups.length === 0) return safeReply(ctx, '📋 Tidak ada grup ditemukan.');
+        const top30  = groups.slice(0, 30);
+        const buttons = top30.map((g, i) => [
+            Markup.button.callback(`${i + 1}. ${g.subject.substring(0, 35)} (${g.participants?.length || 0})`, `selectgroup_${i}`)
+        ]);
+        setState(userId, { mode: 'pilihgrup', groups: top30 });
+        await safeReply(ctx, `🎯 Pilih grup target:\n(Menampilkan ${top30.length} dari ${groups.length} grup)`, {
+            reply_markup: { inline_keyboard: buttons }
+        });
+    } catch (err) {
+        log('ERROR', 'PilihGrup', err.message, err);
+        await safeReply(ctx, `❌ Error: ${err.message}`);
+    }
+}
+
+// Buat Grup WA
+async function handleBuatGrup(ctx) {
+    const userId  = ctx.from.id;
+    const session = userSessions.get(userId);
+    if (!session || !session.loggedIn)
+        return safeReply(ctx, '❌ Kamu belum login WhatsApp.\nKetik atau tekan 🔑 Login WhatsApp.');
+    setState(userId, { mode: 'buatgrup', phase: 'waiting_name' });
+    await safeReply(ctx, `➕ Buat Grup WA\n\nKirim nama grup yang ingin dibuat:\nKetik /batal untuk membatalkan.`);
+}
+
+// Import VCF
+async function handleImportVcf(ctx) {
+    const userId  = ctx.from.id;
+    const session = userSessions.get(userId);
+    if (!session || !session.loggedIn)
+        return safeReply(ctx, '❌ Kamu belum login WhatsApp.\nKetik atau tekan 🔑 Login WhatsApp.');
+
+    const sel = kickSelections.get(userId);
+    if (!sel || !sel.groupId)
+        return safeReply(ctx, '❌ Pilih grup dulu!\nKetik atau tekan 🎯 Pilih Grup.');
+
+    vcfPending.set(userId, {
+        groupId:     sel.groupId,
+        groupName:   sel.groupName,
+        waitingFile: true,
+        createdAt:   Date.now()
+    });
+    await safeReply(ctx, `📥 Import VCF ke grup: ${sel.groupName}\n\nKirim file .vcf yang berisi kontak.\nKetik /batal untuk membatalkan.`);
+}
+
+// Kick Menu
+async function handleKickMenu(ctx) {
+    const userId  = ctx.from.id;
+    const session = userSessions.get(userId);
+    if (!session || !session.loggedIn)
+        return safeReply(ctx, '❌ Kamu belum login WhatsApp.\nKetik atau tekan 🔑 Login WhatsApp.');
+
+    const sel = kickSelections.get(userId);
+    if (!sel || !sel.groupId)
+        return safeReply(ctx, '❌ Pilih grup dulu!\nKetik atau tekan 🎯 Pilih Grup.');
+
+    try {
+        const chats    = await session.sock.groupFetchAllParticipating();
+        const group    = chats[sel.groupId];
+        if (!group) return safeReply(ctx, '❌ Grup tidak ditemukan. Pilih ulang.');
+
+        const myJid    = session.sock.user?.id;
+        const me       = group.participants?.find(p => p.id === myJid || p.id?.split(':')[0] === myJid?.split(':')[0]);
+        const isAdmin_ = me?.admin === 'admin' || me?.admin === 'superadmin';
+        if (!isAdmin_) return safeReply(ctx, '❌ Kamu bukan admin di grup ini. Tidak bisa kick.');
+
+        const members  = group.participants?.filter(p => {
+            const id = p.id?.split(':')[0];
+            const myId = myJid?.split(':')[0];
+            return p.admin !== 'superadmin' && id !== myId;
+        }) || [];
+
+        if (members.length === 0) return safeReply(ctx, '📋 Tidak ada member yang bisa di-kick.');
+
+        const top20   = members.slice(0, 20);
+        const buttons = top20.map((m, i) => {
+            const num = m.id.split('@')[0];
+            return [Markup.button.callback(`👤 ${num}`, `kickmember_${i}`)];
+        });
+        buttons.push([Markup.button.callback('🔴 Kick SEMUA member', 'kick_all')]);
+        buttons.push([Markup.button.callback('❌ Batal', 'kick_cancel')]);
+
+        setState(userId, { mode: 'kickmenu', members: top20, groupId: sel.groupId, groupName: sel.groupName });
+        await safeReply(ctx, `🔴 KICK MENU\n📋 Grup: ${sel.groupName}\n👥 Member: ${members.length}\n\nPilih member yang ingin di-kick:`, {
+            reply_markup: { inline_keyboard: buttons }
+        });
+    } catch (err) {
+        log('ERROR', 'KickMenu', err.message, err);
+        await safeReply(ctx, `❌ Error: ${err.message}`);
+    }
+}
+
+// ==========================================
+// ========== MIDDLEWARE STATE TEXT =========
+// ==========================================
 tgBot.use(async (ctx, next) => {
     const userId = ctx.from?.id;
     if (!userId || !ctx.message?.text) return next();
-
     const state = getState(userId);
     if (!state) return next();
 
+    // addctc: waiting_contacts
     if (state.mode === 'addctc' && state.phase === 'waiting_contacts') {
         const input            = ctx.message.text.trim();
         const existingContacts = state.existingContacts;
         const seen             = new Set(existingContacts.map(c => c.phone));
         const lines            = input.split(/\r?\n/);
-        const newContacts      = [];
-        let added   = 0;
-        let skipped = 0;
-
+        let added = 0, skipped = 0;
+        const newContacts = [];
         for (const line of lines) {
             const parsed = autoDetectAndParse(line);
             if (!parsed) continue;
@@ -1316,54 +1206,39 @@ tgBot.use(async (ctx, next) => {
             newContacts.push({ name: parsed.name || `Kontak ${norm}`, phone: norm });
             added++;
         }
-
-        if (newContacts.length === 0) {
+        if (newContacts.length === 0)
             return safeReply(ctx, `⚠️ Tidak ada kontak baru yang valid. Kirim lagi atau ketik /done.`);
-        }
-
         const allContacts = [...existingContacts, ...newContacts];
-        const vcfContent  = generateVCF(allContacts);
         const baseName    = state.fileName.replace(/\.vcf$/i, '');
-        const vcfBuffer   = Buffer.from(vcfContent, 'utf-8');
-
-        await sendFile(ctx, vcfBuffer, `${baseName}_updated.vcf`, `✅ ${added} kontak baru ditambahkan\n👤 Total: ${allContacts.length} kontak\n🚫 ${skipped} duplikat dilewati`);
+        await sendFile(ctx, Buffer.from(generateVCF(allContacts), 'utf-8'), `${baseName}_updated.vcf`,
+            `✅ ${added} kontak ditambahkan\n👤 Total: ${allContacts.length}\n🚫 ${skipped} duplikat dilewati`);
         clearState(userId);
         return;
     }
 
+    // delctc: waiting_input
     if (state.mode === 'delctc' && state.phase === 'waiting_input') {
         const input    = ctx.message.text.trim();
         const contacts = state.contacts;
-
         try {
             const toDelete = new Set();
-            const parts    = input.split(',');
-            for (const part of parts) {
+            for (const part of input.split(',')) {
                 if (part.includes('-')) {
                     const [start, end] = part.split('-').map(n => parseInt(n.trim()));
                     if (isNaN(start) || isNaN(end)) continue;
-                    for (let i = Math.max(1, start); i <= Math.min(end, contacts.length); i++) {
-                        toDelete.add(i);
-                    }
+                    for (let i = Math.max(1, start); i <= Math.min(end, contacts.length); i++) toDelete.add(i);
                 } else {
                     const num = parseInt(part.trim());
                     if (!isNaN(num) && num >= 1 && num <= contacts.length) toDelete.add(num);
                 }
             }
-
-            if (toDelete.size === 0) {
-                return safeReply(ctx, '❌ Tidak ada nomor urut yang valid. Format: 1,3,5-8,10');
-            }
-
+            if (toDelete.size === 0) return safeReply(ctx, '❌ Format tidak valid. Contoh: 1,3,5-8,10');
             const deletedIndices = Array.from(toDelete).sort((a, b) => b - a);
             const newContacts    = [...contacts];
             for (const idx of deletedIndices) newContacts.splice(idx - 1, 1);
-
-            const vcfContent = generateVCF(newContacts);
-            const baseName   = state.fileName.replace(/\.vcf$/i, '');
-            const vcfBuffer  = Buffer.from(vcfContent, 'utf-8');
-
-            await sendFile(ctx, vcfBuffer, `${baseName}_dihapus.vcf`, `✅ ${toDelete.size} kontak dihapus\nSisa: ${newContacts.length} kontak`);
+            const baseName = state.fileName.replace(/\.vcf$/i, '');
+            await sendFile(ctx, Buffer.from(generateVCF(newContacts), 'utf-8'), `${baseName}_dihapus.vcf`,
+                `✅ ${toDelete.size} kontak dihapus\nSisa: ${newContacts.length} kontak`);
             clearState(userId);
         } catch (err) {
             log('ERROR', 'DelCtc', err.message, err);
@@ -1373,70 +1248,59 @@ tgBot.use(async (ctx, next) => {
         return;
     }
 
+    // totxt: collecting messages
     if (state.mode === 'totxt' && state.active) {
-        const cmd = ctx.message?.text?.startsWith('/');
-        if (cmd) {
-            const command = ctx.message.text.split(' ')[0].split('@')[0];
-            if (command === '/done' || command === '/selesai') return next();
-            return safeReply(ctx, '⚠️ Mode pengumpulan pesan aktif. Hanya /done yang diterima.');
-        }
-        if (state.messages.length >= 500) {
-            return safeReply(ctx, '⚠️ Sudah mencapai batas 500 pesan. Ketik /done untuk generate file.');
-        }
+        if (ctx.message.text.startsWith('/')) return next();
+        if (state.messages.length >= 500)
+            return safeReply(ctx, '⚠️ Sudah 500 pesan. Ketik /done untuk generate file.');
         state.messages.push(ctx.message.text);
         setState(userId, state);
-        await safeReply(ctx, `✅ Pesan ke-${state.messages.length} disimpan. Ketik /done untuk generate file.`);
+        await safeReply(ctx, `✅ Pesan ke-${state.messages.length} disimpan.`);
         return;
     }
 
+    // renamectc: input text
     if (state.mode === 'renamectc') {
         const input    = ctx.message.text.trim();
         const contacts = state.contacts;
-
+        const baseName = state.fileName.replace(/\.vcf$/i, '');
         if (state.phase === 'input_prefix') {
             try {
-                const renamed    = contacts.map(c => ({ name: `${input} ${c.name}`, phone: c.phone }));
-                const vcfContent = generateVCF(renamed);
-                const baseName   = state.fileName.replace(/\.vcf$/i, '');
-                const vcfBuffer  = Buffer.from(vcfContent, 'utf-8');
-                await sendFile(ctx, vcfBuffer, `${baseName}_prefix.vcf`, `✅ Prefix "${input}" ditambahkan ke ${contacts.length} kontak`);
+                const renamed = contacts.map(c => ({ name: `${input} ${c.name}`, phone: c.phone }));
+                await sendFile(ctx, Buffer.from(generateVCF(renamed), 'utf-8'), `${baseName}_prefix.vcf`,
+                    `✅ Prefix "${input}" ditambahkan ke ${contacts.length} kontak`);
                 clearState(userId);
-            } catch (err) {
-                await safeReply(ctx, `❌ Error: ${err.message}`);
-                clearState(userId);
-            }
+            } catch (err) { await safeReply(ctx, `❌ Error: ${err.message}`); clearState(userId); }
             return;
         }
-
         if (state.phase === 'input_suffix') {
             try {
-                const renamed    = contacts.map(c => ({ name: `${c.name} ${input}`, phone: c.phone }));
-                const vcfContent = generateVCF(renamed);
-                const baseName   = state.fileName.replace(/\.vcf$/i, '');
-                const vcfBuffer  = Buffer.from(vcfContent, 'utf-8');
-                await sendFile(ctx, vcfBuffer, `${baseName}_suffix.vcf`, `✅ Suffix "${input}" ditambahkan ke ${contacts.length} kontak`);
+                const renamed = contacts.map(c => ({ name: `${c.name} ${input}`, phone: c.phone }));
+                await sendFile(ctx, Buffer.from(generateVCF(renamed), 'utf-8'), `${baseName}_suffix.vcf`,
+                    `✅ Suffix "${input}" ditambahkan ke ${contacts.length} kontak`);
                 clearState(userId);
-            } catch (err) {
-                await safeReply(ctx, `❌ Error: ${err.message}`);
-                clearState(userId);
-            }
+            } catch (err) { await safeReply(ctx, `❌ Error: ${err.message}`); clearState(userId); }
             return;
         }
-
         if (state.phase === 'input_numbered') {
             try {
-                const renamed    = contacts.map((c, i) => ({ name: `${input} ${i + 1}`, phone: c.phone }));
-                const vcfContent = generateVCF(renamed);
-                const baseName   = state.fileName.replace(/\.vcf$/i, '');
-                const vcfBuffer  = Buffer.from(vcfContent, 'utf-8');
-                await sendFile(ctx, vcfBuffer, `${baseName}_numbered.vcf`, `✅ ${contacts.length} kontak di-rename menjadi "${input} 1" sampai "${input} ${contacts.length}"`);
+                const renamed = contacts.map((c, i) => ({ name: `${input} ${i + 1}`, phone: c.phone }));
+                await sendFile(ctx, Buffer.from(generateVCF(renamed), 'utf-8'), `${baseName}_numbered.vcf`,
+                    `✅ ${contacts.length} kontak di-rename menjadi "${input} 1" s/d "${input} ${contacts.length}"`);
                 clearState(userId);
-            } catch (err) {
-                await safeReply(ctx, `❌ Error: ${err.message}`);
-                clearState(userId);
-            }
+            } catch (err) { await safeReply(ctx, `❌ Error: ${err.message}`); clearState(userId); }
             return;
         }
+    }
+
+    // buatgrup: waiting_name
+    if (state.mode === 'buatgrup' && state.phase === 'waiting_name') {
+        const groupName = ctx.message.text.trim();
+        if (!groupName || groupName.length < 1) return safeReply(ctx, '❌ Nama grup tidak boleh kosong.');
+        if (groupName.length > 100) return safeReply(ctx, '❌ Nama grup maksimal 100 karakter.');
+        setState(userId, { ...state, phase: 'waiting_vcf', groupName });
+        await safeReply(ctx, `📋 Nama grup: ${groupName}\n\nSekarang kirim file .vcf berisi kontak yang akan ditambahkan ke grup.\nAtau ketik /buatkosongan untuk buat grup tanpa member.\nKetik /batal untuk membatalkan.`);
+        return;
     }
 
     return next();
@@ -1446,8 +1310,8 @@ tgBot.use(async (ctx, next) => {
 tgBot.on('document', async (ctx) => {
     const userId = ctx.from.id;
     const doc    = ctx.message.document;
+    const state  = getState(userId);
 
-    const state = getState(userId);
     if (state) {
         switch (state.mode) {
             case 'cv_txt_to_vcf':      return handleCvTxtToVcfFile(ctx, userId, state, doc);
@@ -1464,47 +1328,57 @@ tgBot.on('document', async (ctx) => {
             case 'renamectc':          return handleRenamectcFile(ctx, userId, state, doc);
             case 'renamefile':         return handleRenameFile(ctx, userId, state, doc);
             case 'cvadminfile_upload': return handleAdminFileUploadFile(ctx, userId, state, doc);
+            case 'buatgrup': {
+                if (state.phase === 'waiting_vcf') {
+                    const fname = doc.file_name || 'file.vcf';
+                    if (!fname.toLowerCase().endsWith('.vcf')) return safeReply(ctx, '⚠️ Hanya file .vcf.');
+                    try {
+                        const buffer   = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
+                        const contacts = parseVCF(buffer.toString('utf-8'));
+                        const session  = userSessions.get(userId);
+                        if (!session || !session.loggedIn) return safeReply(ctx, '❌ Sesi WA tidak aktif.');
+                        await safeReply(ctx, `⏳ Membuat grup "${state.groupName}" dengan ${contacts.length} kontak...`);
+                        const phoneList  = contacts.map(c => `${c.phone}@s.whatsapp.net`);
+                        const groupData  = await session.sock.groupCreate(state.groupName, phoneList);
+                        await safeReply(ctx, `✅ Grup berhasil dibuat!\n\n📋 Nama: ${groupData.subject}\n👥 Member: ${contacts.length}\n🆔 ID: ${groupData.id}`);
+                        clearState(userId);
+                    } catch (err) {
+                        log('ERROR', 'BuatGrup', err.message, err);
+                        await safeReply(ctx, `❌ Gagal buat grup: ${err.message}`);
+                        clearState(userId);
+                    }
+                }
+                return;
+            }
         }
     }
 
-    if (!isAdmin(userId)) {
-        const status = await getUserStatus(userId);
-        if (!['regular', 'trial'].includes(status)) {
-            return safeReply(ctx, '❌ Akses ditolak. Fitur ini hanya untuk user premium/trial.');
-        }
-    }
-
+    // Cek pending VCF import
     const pending = vcfPending.get(userId);
-    if (!pending || !pending.waitingFile) return;
-
-    const fname = doc.file_name || '';
-    if (!fname.toLowerCase().endsWith('.vcf')) {
-        return safeReply(ctx, '⚠️ File harus .vcf');
-    }
-
-    await safeReply(ctx, '⏳ Membaca file VCF...');
-    try {
-        const buffer   = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
-        const vcfText  = buffer.toString('utf-8');
-        const contacts = parseVCF(vcfText);
-
-        if (contacts.length === 0) {
+    if (pending && pending.waitingFile) {
+        const fname = doc.file_name || '';
+        if (!fname.toLowerCase().endsWith('.vcf')) return safeReply(ctx, '⚠️ File harus .vcf');
+        await safeReply(ctx, '⏳ Membaca file VCF...');
+        try {
+            const buffer   = await downloadTelegramFile(ctx, doc.file_id, bytesToMB(doc.file_size));
+            const contacts = parseVCF(buffer.toString('utf-8'));
+            if (contacts.length === 0) {
+                vcfPending.delete(userId);
+                return safeReply(ctx, '❌ Tidak ada nomor valid.');
+            }
+            pending.contacts    = contacts;
+            pending.waitingFile = false;
+            vcfPending.set(userId, pending);
+            const keyboard = Markup.inlineKeyboard([
+                [Markup.button.callback(`✅ Tambah Semua (${contacts.length})`, 'vcf_add_all')],
+                [Markup.button.callback('❌ Batal', 'vcf_cancel')]
+            ]);
+            await safeReply(ctx, `📊 ${contacts.length} kontak ditemukan.\n🎯 Grup: ${pending.groupName}\n\nTambahkan sekarang?`, { ...keyboard });
+        } catch (err) {
             vcfPending.delete(userId);
-            return safeReply(ctx, '❌ Tidak ada nomor valid.');
+            await safeReply(ctx, `❌ Error: ${err.message}`);
         }
-
-        pending.contacts    = contacts;
-        pending.waitingFile = false;
-        vcfPending.set(userId, pending);
-
-        const keyboard = Markup.inlineKeyboard([
-            [Markup.button.callback(`✅ Tambah Semua (${contacts.length})`, 'vcf_add_all')],
-            [Markup.button.callback('❌ Batal', 'vcf_cancel')]
-        ]);
-        await safeReply(ctx, `📊 ${contacts.length} kontak ditemukan.\n🎯 Grup: ${pending.groupName}\n\nTambahkan sekarang?`, { ...keyboard });
-    } catch (err) {
-        vcfPending.delete(userId);
-        await safeReply(ctx, `❌ Error: ${err.message}`);
+        return;
     }
 });
 
@@ -1512,60 +1386,148 @@ tgBot.on('document', async (ctx) => {
 tgBot.on('photo', async (ctx) => {
     const userId = ctx.from.id;
     const state  = getState(userId);
-
     if (state && state.mode === 'rekapgroup' && state.phase === 'waiting_photo') {
         const caption      = ctx.message.caption || '';
         const captionMatch = caption.match(/^(.+?)\|(\d+)$/);
-
         if (captionMatch) {
             const groupName   = captionMatch[1].trim();
             const memberCount = captionMatch[2];
-            const rekapText   = `📸 REKAP GRUP\n${'─'.repeat(30)}\n📋 Nama Grup : ${groupName}\n👥 Jumlah Member : ${memberCount}\n📅 Di-rekap : ${formatDate(new Date().toISOString())}`;
             clearState(userId);
-            return safeReply(ctx, rekapText);
+            return safeReply(ctx, `📸 REKAP GRUP\n${'─'.repeat(30)}\n📋 Nama Grup: ${groupName}\n👥 Jumlah Member: ${memberCount}\n📅 Di-rekap: ${formatDate(new Date().toISOString())}`);
         }
-
-        await safeReply(ctx, `📸 Foto diterima!\n\nBot tidak bisa membaca teks dari gambar.\nSilakan kirim ulang dengan caption format:\nNamaGrup|JumlahMember`);
+        await safeReply(ctx, `📸 Foto diterima!\n\nBot tidak bisa membaca teks dari gambar.\nKirim ulang dengan caption format:\nNamaGrup|JumlahMember`);
     }
 });
 
-// ========== COMMANDS ==========
-tgBot.command('cv_txt_to_vcf',  async (ctx) => handleCvTxtToVcfStart(ctx, ctx.from.id));
-tgBot.command('cv_vcf_to_txt',  async (ctx) => handleCvVcfToTxtStart(ctx, ctx.from.id));
-tgBot.command('cv_xlsx_to_vcf', async (ctx) => handleCvXlsxToVcfStart(ctx, ctx.from.id));
-tgBot.command('txt2vcf',        async (ctx) => handleTxt2VcfStart(ctx, ctx.from.id));
-tgBot.command('gabungtxt',      async (ctx) => handleGabungTxtStart(ctx, ctx.from.id));
-tgBot.command('gabungvcf',      async (ctx) => handleGabungVcfStart(ctx, ctx.from.id));
-tgBot.command('pecahfile',      async (ctx) => handlePecahFileStart(ctx, ctx.from.id));
-tgBot.command('addctc',         async (ctx) => handleAddCtcStart(ctx, ctx.from.id));
-tgBot.command('delctc',         async (ctx) => handleDelCtcStart(ctx, ctx.from.id));
-tgBot.command('hitungctc',      async (ctx) => handleHitungCtcStart(ctx, ctx.from.id));
-tgBot.command('totxt',          async (ctx) => handleTotxtStart(ctx, ctx.from.id));
-tgBot.command('rekapgroup',     async (ctx) => handleRekapGroup(ctx, ctx.from.id));
-tgBot.command('renamectc',      async (ctx) => handleRenamectcStart(ctx, ctx.from.id));
-tgBot.command('cvadminfile',    async (ctx) => handleCvAdminFile(ctx, ctx.from.id));
+// ========================================================
+// ========== COMMANDS (TIDAK DUPLIKAT) ===================
+// ========================================================
+tgBot.command('start', async (ctx) => {
+    const userId = ctx.from.id;
+    const name   = ctx.from.first_name || 'User';
+    const kb     = await getKeyboard(userId);
+    await safeReply(ctx, `${BOT_NAME}\n\n👋 Halo ${name}!\n\nBot ini bisa:\n• Kick anggota grup WA\n• Konversi file TXT, VCF, XLSX\n• Gabung & pecah file kontak\n• Dan banyak lagi!\n\n🔧 File Tools bisa diakses semua orang.\n📱 Fitur WA butuh login & akses.\n\nPilih menu di keyboard bawah 👇`, { ...kb });
+});
+
+tgBot.command(['cv_txt_to_vcf'],  async (ctx) => handleCvTxtToVcfStart(ctx, ctx.from.id));
+tgBot.command(['cv_vcf_to_txt'],  async (ctx) => handleCvVcfToTxtStart(ctx, ctx.from.id));
+tgBot.command(['cv_xlsx_to_vcf'], async (ctx) => handleCvXlsxToVcfStart(ctx, ctx.from.id));
+tgBot.command(['txt2vcf'],        async (ctx) => handleTxt2VcfStart(ctx, ctx.from.id));
+tgBot.command(['gabungtxt'],      async (ctx) => handleGabungTxtStart(ctx, ctx.from.id));
+tgBot.command(['gabungvcf'],      async (ctx) => handleGabungVcfStart(ctx, ctx.from.id));
+tgBot.command(['pecahfile'],      async (ctx) => handlePecahFileStart(ctx, ctx.from.id));
+tgBot.command(['addctc'],         async (ctx) => handleAddCtcStart(ctx, ctx.from.id));
+tgBot.command(['delctc'],         async (ctx) => handleDelCtcStart(ctx, ctx.from.id));
+tgBot.command(['hitungctc'],      async (ctx) => handleHitungCtcStart(ctx, ctx.from.id));
+tgBot.command(['totxt'],          async (ctx) => handleTotxtStart(ctx, ctx.from.id));
+tgBot.command(['rekapgroup'],     async (ctx) => handleRekapGroup(ctx, ctx.from.id));
+tgBot.command(['renamectc'],      async (ctx) => handleRenamectcStart(ctx, ctx.from.id));
+tgBot.command(['cvadminfile'],    async (ctx) => handleCvAdminFile(ctx, ctx.from.id));
+tgBot.command(['listgc'],         async (ctx) => handleListGc(ctx));
+tgBot.command(['login'],          async (ctx) => ctx.message.text = '🔑 Login WhatsApp');
 
 tgBot.command('pecahctc', async (ctx) => {
-    const args   = ctx.message.text.split(' ');
-    const jumlah = args[1] || '100';
-    await handlePecahCtcStart(ctx, ctx.from.id, jumlah);
+    const args = ctx.message.text.split(' ');
+    await handlePecahCtcStart(ctx, ctx.from.id, args[1] || '100');
 });
 
 tgBot.command('renamefile', async (ctx) => {
-    const args    = ctx.message.text.split(' ');
+    const args = ctx.message.text.split(' ');
     args.shift();
-    const newName = args.join(' ').trim();
-    await handleRenameFileStart(ctx, ctx.from.id, newName);
+    await handleRenameFileStart(ctx, ctx.from.id, args.join(' ').trim());
 });
 
-tgBot.command('listgc', async (ctx) => {
-    await handleListGc(ctx);
+tgBot.command('buatkosongan', async (ctx) => {
+    const userId  = ctx.from.id;
+    const session = userSessions.get(userId);
+    if (!session || !session.loggedIn) return safeReply(ctx, '❌ Login dulu!');
+    const state   = getState(userId);
+    if (!state || state.mode !== 'buatgrup') return safeReply(ctx, '❌ Mulai dulu dengan menu ➕ Buat Grup WA.');
+    try {
+        const myJid    = session.sock.user?.id;
+        const groupData = await session.sock.groupCreate(state.groupName, [myJid]);
+        await safeReply(ctx, `✅ Grup kosong berhasil dibuat!\n\n📋 Nama: ${groupData.subject}\n🆔 ID: ${groupData.id}`);
+        clearState(userId);
+    } catch (err) {
+        log('ERROR', 'BuatKosongan', err.message, err);
+        await safeReply(ctx, `❌ Gagal buat grup: ${err.message}`);
+        clearState(userId);
+    }
+});
+
+tgBot.command('beli', async (ctx) => {
+    await showPackages(ctx, ctx.from.id);
+});
+
+tgBot.command('revoke', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return safeReply(ctx, '⛔ Hanya admin!');
+    const args = ctx.message.text.split(' ');
+    if (args.length < 2) return safeReply(ctx, `Cara pakai: /revoke [user_id]\nContoh: /revoke 123456789`);
+    const userId = parseInt(args[1]);
+    if (isNaN(userId)) return safeReply(ctx, '❌ ID tidak valid.');
+    if (!db.getUser(userId)) return safeReply(ctx, `❌ User ${userId} tidak ditemukan.`);
+    db.deleteUser(userId);
+    if (userSessions.has(userId)) {
+        try { await userSessions.get(userId)?.sock?.logout(); } catch (_) {}
+        userSessions.delete(userId);
+    }
+    await safeReply(ctx, `✅ Akses user ${userId} dicabut.`);
+    try { await tgBot.telegram.sendMessage(userId, `🔴 Akses Anda dicabut.\nHub. admin: ${PAYMENT_CONTACT}`); } catch (_) {}
+});
+
+// FIX: command help → 1 definisi saja
+tgBot.command('help', async (ctx) => {
+    const userId = ctx.from.id;
+    const kb     = await getKeyboard(userId);
+    const helpText = `🤖 WA KICKER BOT - PANDUAN
+
+${'─'.repeat(30)}
+🔧 FILE TOOLS (semua user):
+/cv_txt_to_vcf  - TXT → VCF (batch)
+/cv_vcf_to_txt  - VCF → TXT (batch)
+/cv_xlsx_to_vcf - XLSX → VCF
+/txt2vcf        - Auto-detect TXT → VCF
+/gabungtxt      - Gabung banyak TXT
+/gabungvcf      - Gabung banyak VCF
+/pecahfile      - Pecah VCF per bagian
+/pecahctc [n]   - Pecah VCF per n kontak
+/addctc         - Tambah kontak ke VCF
+/delctc         - Hapus kontak dari VCF
+/hitungctc      - Hitung kontak VCF
+/renamectc      - Rename kontak VCF
+/renamefile [n] - Rename file
+/totxt          - Simpan pesan ke TXT
+/rekapgroup     - Rekap grup dari foto
+
+${'─'.repeat(30)}
+📱 FITUR WA (perlu login):
+/listgc  - List semua grup
+🎯 Pilih Grup - Pilih target grup
+➕ Buat Grup WA - Buat grup baru
+📥 Import VCF - Import kontak ke grup
+🔴 Kick Menu - Kick anggota grup
+
+${'─'.repeat(30)}
+📋 PERINTAH UMUM:
+/start  - Mulai bot
+/done   - Selesaikan proses batch
+/batal  - Batalkan proses
+/beli   - Lihat & beli paket premium
+/help   - Panduan ini
+
+${'─'.repeat(30)}
+💳 PEMBAYARAN:
+🏦 ${PAYMENT_BANK_NAME} - ${PAYMENT_BANK_NUMBER} (${PAYMENT_BANK_HOLDER})
+📱 Dana: ${PAYMENT_DANA}
+📩 Konfirmasi: ${PAYMENT_CONTACT}`;
+
+    await safeReply(ctx, helpText, { ...kb });
 });
 
 tgBot.command(['done', 'selesai'], async (ctx) => {
     const userId = ctx.from.id;
     const state  = getState(userId);
-    if (!state) return safeReply(ctx, '❌ Tidak ada proses yang sedang berjalan.');
+    if (!state) return safeReply(ctx, '❌ Tidak ada proses yang berjalan.');
 
     switch (state.mode) {
         case 'cv_txt_to_vcf': return finalizeCvTxtToVcf(ctx, userId, state);
@@ -1573,45 +1535,35 @@ tgBot.command(['done', 'selesai'], async (ctx) => {
         case 'gabungtxt':     return finalizeGabungTxt(ctx, userId, state);
         case 'gabungvcf':     return finalizeGabungVcf(ctx, userId, state);
         case 'totxt': {
-            if (state.messages.length === 0) {
-                clearState(userId);
-                return safeReply(ctx, '❌ Tidak ada pesan yang dikumpulkan.');
-            }
-            const txtContent = state.messages.join('\n');
-            const txtBuffer  = Buffer.from(txtContent, 'utf-8');
-            await sendFile(ctx, txtBuffer, `pesan_${Date.now()}.txt`, `✅ ${state.messages.length} pesan disimpan`);
+            if (state.messages.length === 0) { clearState(userId); return safeReply(ctx, '❌ Tidak ada pesan.'); }
+            await sendFile(ctx, Buffer.from(state.messages.join('\n'), 'utf-8'), `pesan_${Date.now()}.txt`, `✅ ${state.messages.length} pesan disimpan`);
             clearState(userId);
             return;
         }
         default:
             clearState(userId);
-            return safeReply(ctx, '✅ Proses dibatalkan.');
+            return safeReply(ctx, '✅ Proses dihentikan.');
     }
 });
 
 tgBot.command('batal', async (ctx) => {
     clearState(ctx.from.id);
+    vcfPending.delete(ctx.from.id);
     await safeReply(ctx, '✅ Proses dibatalkan.');
 });
 
-tgBot.start(async (ctx) => {
-    const userId = ctx.from.id;
-    const name   = ctx.from.first_name || 'User';
-    const kb     = await getKeyboard(userId);
+// ==========================================
+// ========== HEARS HANDLERS =================
+// ==========================================
 
-    await safeReply(ctx, `╔══════════════════════╗\n║  ${BOT_NAME}\n╚══════════════════════╝\n\n👋 Halo ${name}!\n\nBot ini bisa:\n• Kick anggota grup WA\n• Konversi file (TXT, VCF, XLSX)\n• Gabung & pecah file kontak\n• Dan banyak lagi!\n\n🔧 *File Tools* bisa diakses semua orang.\n📱 Fitur WA butuh login & akses.\n\nPilih menu di keyboard bawah 👇`, { ...kb });
-});
-
-// ========== HEARS HANDLERS ==========
+// File Tools Menu
 tgBot.hears('🔧 File Tools', async (ctx) => {
-    await safeReply(ctx, `🔧 *FILE TOOLS MENU*\n\nPilih tool yang ingin digunakan:`, { ...KB_FILE_TOOLS });
+    await safeReply(ctx, `🔧 FILE TOOLS MENU\n\nPilih tool:`, { ...KB_FILE_TOOLS });
 });
-
 tgBot.hears('↩️ Kembali', async (ctx) => {
     const kb = await getKeyboard(ctx.from.id);
     await safeReply(ctx, '↩️ Kembali ke menu utama.', { ...kb });
 });
-
 tgBot.hears('🔄 TXT → VCF',     async (ctx) => handleCvTxtToVcfStart(ctx, ctx.from.id));
 tgBot.hears('🔄 VCF → TXT',     async (ctx) => handleCvVcfToTxtStart(ctx, ctx.from.id));
 tgBot.hears('📊 XLSX → VCF',    async (ctx) => handleCvXlsxToVcfStart(ctx, ctx.from.id));
@@ -1626,42 +1578,292 @@ tgBot.hears('✏️ Rename Kontak', async (ctx) => handleRenamectcStart(ctx, ctx
 tgBot.hears('📸 Rekap Grup',    async (ctx) => handleRekapGroup(ctx, ctx.from.id));
 tgBot.hears('📄 Pesan ke TXT',  async (ctx) => handleTotxtStart(ctx, ctx.from.id));
 tgBot.hears('📁 Admin File Manager', async (ctx) => handleCvAdminFile(ctx, ctx.from.id));
-tgBot.hears('📋 List Grup WA', async (ctx) => handleListGc(ctx));
-
+tgBot.hears('📋 List Grup WA',  async (ctx) => handleListGc(ctx));
 tgBot.hears('✂️ Pecah VCF (jlh)', async (ctx) => {
-    await safeReply(ctx, `Format: /pecahctc [jumlah]\n\nContoh:\n/pecahctc 50`);
+    await safeReply(ctx, `Format: /pecahctc [jumlah]\n\nContoh: /pecahctc 50`);
 });
-
 tgBot.hears('📝 Rename File', async (ctx) => {
-    await safeReply(ctx, `Format: /renamefile [nama_baru]\n\nContoh:\n/renamefile arisan_2024`);
+    await safeReply(ctx, `Format: /renamefile [nama_baru]\n\nContoh: /renamefile arisan_2024`);
 });
 
-// ========== INLINE BUTTON HANDLERS ==========
+// WhatsApp Menu Handlers
+tgBot.hears('🔑 Login WhatsApp', async (ctx) => {
+    const userId  = ctx.from.id;
+    const session = userSessions.get(userId);
+
+    if (session && session.loggedIn)
+        return safeReply(ctx, '✅ Sudah login WhatsApp.\nGunakan menu di bawah atau /logout untuk keluar.');
+    if (loginLocks.has(userId))
+        return safeReply(ctx, '⏳ Proses login sedang berjalan. Scan QR Code yang sudah dikirim.');
+
+    if (!isAdmin(userId)) {
+        const status = await getUserStatus(userId);
+        if (!['regular', 'trial'].includes(status))
+            return safeReply(ctx, '❌ Fitur login WhatsApp memerlukan akses premium.\nKetik /beli untuk beli paket.', { ...KB_LANDING });
+    }
+
+    loginLocks.set(userId, Date.now());
+    await safeReply(ctx, `🔐 LOGIN WHATSAPP\n\nQR Code akan dikirim dalam beberapa saat...\n\n📱 Cara scan:\n1. Buka WhatsApp\n2. Menu (3 titik) → Perangkat Tertaut → Tautkan Perangkat\n3. Scan QR Code`);
+
+    try {
+        const { version }         = await fetchLatestBaileysVersion();
+        const { state, saveCreds } = await useMultiFileAuthState(path.join(AUTH_BASE_FOLDER, `user_${userId}`));
+        const sock = makeWASocket({
+            version,
+            auth: state,
+            printQRInTerminal: false,
+            logger: pino({ level: 'silent' }),
+            browser: ['WA Kicker Bot', 'Chrome', '1.0.0']
+        });
+
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
+
+            if (qr) {
+                try {
+                    const qrImage = await QRCode.toBuffer(qr, { type: 'png', width: 300, margin: 2 });
+                    await ctx.replyWithPhoto({ source: qrImage }, {
+                        caption: `📱 SCAN QR CODE INI\n\n1. Buka WhatsApp\n2. Perangkat Tertaut\n3. Tautkan Perangkat\n4. Scan QR Code\n\n⏳ Berlaku ~2 menit`
+                    });
+                } catch (err) {
+                    await safeReply(ctx, `❌ Gagal generate QR: ${err.message}`);
+                }
+                return;
+            }
+
+            if (connection === 'open') {
+                userSessions.set(userId, { sock, loggedIn: true });
+                loginLocks.delete(userId);
+                const kb = await getKeyboard(userId);
+                await safeReply(ctx, `✅ BERHASIL LOGIN!\n\nWhatsApp terhubung. Gunakan menu di keyboard bawah.`, { ...kb });
+            }
+
+            if (connection === 'close') {
+                loginLocks.delete(userId);
+                const code = lastDisconnect?.error?.output?.statusCode;
+                if (code === DisconnectReason.loggedOut) {
+                    userSessions.delete(userId);
+                    await safeReply(ctx, `⚠️ WhatsApp logout. Silakan login ulang.`);
+                } else {
+                    // Reconnect otomatis jika bukan logout
+                    userSessions.delete(userId);
+                    await safeReply(ctx, `⚠️ Koneksi terputus. Silakan login ulang.`);
+                }
+            }
+        });
+
+        sock.ev.on('creds.update', saveCreds);
+    } catch (err) {
+        loginLocks.delete(userId);
+        log('ERROR', 'Login', err.message, err);
+        await safeReply(ctx, `❌ Gagal login: ${err.message}`);
+    }
+});
+
+tgBot.hears('📋 Daftar Grup', async (ctx) => handleListGc(ctx));
+
+tgBot.hears('🎯 Pilih Grup', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) {
+        const status = await getUserStatus(ctx.from.id);
+        if (!['regular', 'trial'].includes(status))
+            return safeReply(ctx, '❌ Akses ditolak.', { ...KB_LANDING });
+    }
+    await handlePilihGrup(ctx);
+});
+
+tgBot.hears('➕ Buat Grup WA', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) {
+        const status = await getUserStatus(ctx.from.id);
+        if (!['regular', 'trial'].includes(status))
+            return safeReply(ctx, '❌ Akses ditolak.', { ...KB_LANDING });
+    }
+    await handleBuatGrup(ctx);
+});
+
+tgBot.hears('📥 Import VCF', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) {
+        const status = await getUserStatus(ctx.from.id);
+        if (!['regular', 'trial'].includes(status))
+            return safeReply(ctx, '❌ Akses ditolak.', { ...KB_LANDING });
+    }
+    await handleImportVcf(ctx);
+});
+
+tgBot.hears('🔴 Kick Menu', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) {
+        const status = await getUserStatus(ctx.from.id);
+        if (!['regular', 'trial'].includes(status))
+            return safeReply(ctx, '❌ Akses ditolak.', { ...KB_LANDING });
+    }
+    await handleKickMenu(ctx);
+});
+
+// Status — FIX: 1 definisi, cocok dengan keyboard '📊 Status'
+tgBot.hears('📊 Status', async (ctx) => {
+    const userId  = ctx.from.id;
+    const status  = await getUserStatus(userId);
+    const session = userSessions.get(userId);
+    const waStatus = (session && session.loggedIn) ? '✅ Terhubung' : '❌ Belum Login';
+
+    let text = `📊 STATUS BOT\n${'─'.repeat(30)}\n👤 Akun: `;
+    if (isAdmin(userId)) {
+        text += `👑 ADMIN\n`;
+    } else if (status === 'regular') {
+        const u = db.getUser(userId);
+        text += `⭐ PREMIUM\n📅 Expires: ${formatDate(u.expiresAt)}\n⏳ Sisa: ${formatCountdown(u.expiresAt)}\n`;
+    } else if (status === 'trial') {
+        const u = db.getUser(userId);
+        text += `🎁 TRIAL\n📅 Expires: ${formatDate(u.trialExpiresAt)}\n⏳ Sisa: ${formatCountdown(u.trialExpiresAt)}\n`;
+    } else if (status === 'expired') {
+        text += `⚠️ EXPIRED — ketik /beli untuk perpanjang\n`;
+    } else if (status === 'trial_expired') {
+        text += `⚠️ TRIAL HABIS — ketik /beli untuk upgrade\n`;
+    } else {
+        text += `❓ BELUM REGISTER — coba /start\n`;
+    }
+    text += `${'─'.repeat(30)}\n📱 WhatsApp: ${waStatus}\n🤖 Bot: ✅ Aktif\n🕐 Server: ${formatDate(new Date().toISOString())}`;
+
+    await safeReply(ctx, text);
+});
+
+tgBot.hears('👤 Akun Saya', async (ctx) => {
+    const userId = ctx.from.id;
+    const user   = db.getUser(userId);
+    if (!user && !isAdmin(userId))
+        return safeReply(ctx, `👤 Belum punya akun.\nCoba /start atau 🎁 Coba Gratis (Trial).`);
+
+    let text = `👤 AKUN ANDA\n${'─'.repeat(30)}\n🆔 ID: ${userId}\n📧 Username: @${ctx.from.username || '-'}\n📋 Role: `;
+    if (isAdmin(userId)) text += `👑 ADMIN\n`;
+    else if (user?.role === 'regular') text += `⭐ PREMIUM\n📅 Expires: ${formatDate(user.expiresAt)}\n`;
+    else if (user?.role === 'trial')   text += `🎁 TRIAL\n📅 Expires: ${formatDate(user.trialExpiresAt)}\n`;
+    text += `${'─'.repeat(30)}\nKetik /beli untuk lihat paket`;
+
+    await safeReply(ctx, text);
+});
+
+// FIX: Satu definisi saja untuk ⭐ Premium
+tgBot.hears('⭐ Premium', async (ctx) => {
+    await showPackages(ctx, ctx.from.id);
+});
+
+tgBot.hears('🎁 Coba Gratis (Trial)', async (ctx) => {
+    const userId = ctx.from.id;
+    if (isAdmin(userId)) return safeReply(ctx, '👑 Kamu adalah admin, tidak perlu trial.');
+    const existing = db.getUser(userId);
+    if (existing?.hadTrial) return safeReply(ctx, '❌ Kamu sudah pernah menggunakan trial.\nKetik /beli untuk upgrade ke premium.');
+    if (existing?.role === 'regular') return safeReply(ctx, '✅ Kamu sudah punya paket premium aktif!');
+
+    const trialExpiresAt = new Date(Date.now() + TRIAL_DURATION_HOURS * 3600000).toISOString();
+    db.saveUser({ id: userId, role: 'trial', trialExpiresAt, hadTrial: 1, notifiedExpiry: 0 });
+    const kb = await getKeyboard(userId);
+    await safeReply(ctx, `🎁 TRIAL AKTIF!\n\n⏳ Masa trial: ${TRIAL_DURATION_HOURS} jam\n📅 Berakhir: ${formatDate(trialExpiresAt)}\n\nSelamat mencoba! Gunakan menu di bawah.`, { ...kb });
+});
+
+// FIX: Satu definisi untuk ❓ Bantuan
+tgBot.hears('❓ Bantuan', async (ctx) => {
+    await ctx.reply(
+        `🤖 WA KICKER BOT - PANDUAN\n\n` +
+        `🔧 FILE TOOLS (Semua user bisa akses):\n` +
+        `• 🔄 TXT → VCF   • 🔄 VCF → TXT\n` +
+        `• 📊 XLSX → VCF  • 📝 TXT2VCF Auto\n` +
+        `• 🔗 Gabung TXT  • 🔗 Gabung VCF\n` +
+        `• ✂️ Pecah VCF   • ➕ Tambah Kontak\n` +
+        `• ➖ Hapus Kontak • 🔢 Hitung Kontak\n` +
+        `• ✏️ Rename Kontak • 📝 Rename File\n` +
+        `• 📄 Pesan ke TXT • 📸 Rekap Grup\n\n` +
+        `📱 FITUR WA (Perlu login & akses):\n` +
+        `• Login → Scan QR Code WhatsApp\n` +
+        `• Daftar/Pilih Grup → Manage grup\n` +
+        `• Buat Grup WA → Grup baru\n` +
+        `• Import VCF → Tambah kontak ke grup\n` +
+        `• Kick Menu → Kick anggota\n\n` +
+        `⭐ PAKET PREMIUM:\n` +
+        `• /beli - Lihat semua paket\n\n` +
+        `📋 PERINTAH:\n` +
+        `/done - Selesaikan proses\n` +
+        `/batal - Batalkan proses\n` +
+        `/help - Panduan lengkap\n\n` +
+        `❓ Pertanyaan? Hub: ${PAYMENT_CONTACT}`
+    );
+});
+
+// Admin menus
+tgBot.hears('📋 Pending Payment', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return safeReply(ctx, '⛔ Hanya admin.');
+    const payments = db.getAllPendingPayments();
+    if (payments.length === 0) return safeReply(ctx, '📋 Tidak ada payment pending.');
+    let text = `📋 PENDING PAYMENTS\n${'─'.repeat(30)}\n`;
+    payments.forEach((p, i) => {
+        text += `${i + 1}. User: ${p.userId}\n   Paket: ${p.package}\n   Harga: ${formatRupiah(p.price)}\n   Tgl: ${formatDate(p.date)}\n\n`;
+    });
+    await safeReply(ctx, text);
+});
+
+// FIX: Satu definisi untuk 👥 User List, dengan fitur revoke
+tgBot.hears('👥 User List', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return safeReply(ctx, '⛔ Hanya admin.');
+    const users = db.getAllUsers();
+    if (users.length === 0) return safeReply(ctx, '👥 Belum ada user terdaftar.');
+    const buttons = users.slice(0, 30).map(u => {
+        const label = `${u.role === 'regular' ? '⭐' : u.role === 'trial' ? '🎁' : '❓'} ${u.id} (${u.role})`;
+        return [Markup.button.callback(label, `userinfo_${u.id}`)];
+    });
+    buttons.push([Markup.button.callback('❌ Tutup', 'close_userlist')]);
+    await safeReply(ctx, `👥 DAFTAR USER (${users.length})\n\nKlik untuk detail & revoke:`, {
+        reply_markup: { inline_keyboard: buttons }
+    });
+});
+
+tgBot.hears('🚪 Logout WhatsApp', async (ctx) => {
+    const userId  = ctx.from.id;
+    const session = userSessions.get(userId);
+    if (!session || !session.loggedIn) return safeReply(ctx, '❌ Belum login WhatsApp.');
+    try { await session.sock.logout(); } catch (_) {}
+    userSessions.delete(userId);
+    const kb = await getKeyboard(userId);
+    await safeReply(ctx, `✅ Logout berhasil. WhatsApp diputus.`, { ...kb });
+});
+
+// =============================================
+// ========== INLINE BUTTON HANDLERS ===========
+// =============================================
+
+// Select Group
+tgBot.action(/^selectgroup_(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const idx   = parseInt(ctx.match[1]);
+    const state = getState(ctx.from.id);
+    if (!state || state.mode !== 'pilihgrup') return ctx.editMessageText('❌ Session expired.');
+    const group = state.groups[idx];
+    if (!group) return ctx.editMessageText('❌ Grup tidak valid.');
+    kickSelections.set(ctx.from.id, {
+        groupId:   group.id,
+        groupName: group.subject,
+        createdAt: Date.now()
+    });
+    clearState(ctx.from.id);
+    await ctx.editMessageText(`✅ Grup dipilih: ${group.subject}\n👥 Member: ${group.participants?.length || 0}\n\nSekarang bisa gunakan menu:\n• 📥 Import VCF\n• 🔴 Kick Menu`);
+});
+
+// Pecah file
 tgBot.action(/^pecahfile_(\d+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const parts = parseInt(ctx.match[1]);
     const state = getState(ctx.from.id);
     if (!state || state.mode !== 'pecahfile') return ctx.editMessageText('❌ Session expired.');
-
-    const contacts      = state.contacts;
-    const baseName      = state.baseName;
-    const totalContacts = contacts.length;
-    const perPart       = Math.ceil(totalContacts / parts);
-
+    const { contacts, baseName } = state;
+    const perPart = Math.ceil(contacts.length / parts);
     try {
         for (let i = 0; i < parts; i++) {
             const partContacts = contacts.slice(i * perPart, (i + 1) * perPart);
             if (partContacts.length === 0) break;
             const vcfContent = generateVCF(partContacts);
-            const vcfBuffer  = Buffer.from(vcfContent, 'utf-8');
-            await sendFile(ctx, vcfBuffer, `${baseName}_part${i + 1}.vcf`, `📄 Bagian ${i + 1}/${parts}: ${partContacts.length} kontak`);
+            await sendFile(ctx, Buffer.from(vcfContent, 'utf-8'), `${baseName}_part${i + 1}.vcf`, `📄 Bagian ${i + 1}/${parts}: ${partContacts.length} kontak`);
         }
-        await safeReply(ctx, `✅ File berhasil dipecah menjadi ${parts} bagian\n📋 Total kontak: ${totalContacts}`);
+        await safeReply(ctx, `✅ File dipecah menjadi ${parts} bagian\n📋 Total kontak: ${contacts.length}`);
     } catch (err) {
-        await safeReply(ctx, `❌ Error: ${esc(err.message)}`);
-    } finally {
-        clearState(ctx.from.id);
-    }
+        await safeReply(ctx, `❌ Error: ${err.message}`);
+    } finally { clearState(ctx.from.id); }
 });
 
 tgBot.action('pecahfile_cancel', async (ctx) => {
@@ -1669,35 +1871,125 @@ tgBot.action('pecahfile_cancel', async (ctx) => {
     await ctx.editMessageText('✖ Dibatalkan.');
 });
 
+// Rename actions
 tgBot.action('rename_prefix', async (ctx) => {
     await ctx.answerCbQuery();
     const state = getState(ctx.from.id);
     if (!state || state.mode !== 'renamectc') return;
     setState(ctx.from.id, { ...state, phase: 'input_prefix' });
-    await safeReply(ctx, '✏️ Masukkan prefix:\n\nContoh: Tim Marketing\n\nHasil: "Tim Marketing Budi"');
+    await safeReply(ctx, '✏️ Masukkan prefix:\n\nContoh: Tim A\nHasil: "Tim A Budi"');
 });
-
 tgBot.action('rename_suffix', async (ctx) => {
     await ctx.answerCbQuery();
     const state = getState(ctx.from.id);
     if (!state || state.mode !== 'renamectc') return;
     setState(ctx.from.id, { ...state, phase: 'input_suffix' });
-    await safeReply(ctx, '✏️ Masukkan suffix:\n\nContoh: (2024)\n\nHasil: "Budi (2024)"');
+    await safeReply(ctx, '✏️ Masukkan suffix:\n\nContoh: (2025)\nHasil: "Budi (2025)"');
 });
-
 tgBot.action('rename_numbered', async (ctx) => {
     await ctx.answerCbQuery();
     const state = getState(ctx.from.id);
     if (!state || state.mode !== 'renamectc') return;
     setState(ctx.from.id, { ...state, phase: 'input_numbered' });
-    await safeReply(ctx, '✏️ Masukkan nama template:\n\nContoh: Member\n\nHasil: "Member 1", "Member 2"');
+    await safeReply(ctx, '✏️ Masukkan nama template:\n\nContoh: Member\nHasil: "Member 1", "Member 2"...');
 });
-
 tgBot.action('rename_cancel', async (ctx) => {
     clearState(ctx.from.id);
-    await ctx.editMessageText('✖ Rename kontak dibatalkan.');
+    await ctx.editMessageText('✖ Dibatalkan.');
 });
 
+// Kick actions
+tgBot.action(/^kickmember_(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const idx     = parseInt(ctx.match[1]);
+    const state   = getState(ctx.from.id);
+    const session = userSessions.get(ctx.from.id);
+    if (!state || state.mode !== 'kickmenu') return ctx.editMessageText('❌ Session expired.');
+    if (!session || !session.loggedIn) return ctx.editMessageText('❌ Sesi WA tidak aktif.');
+    const member = state.members[idx];
+    if (!member) return ctx.editMessageText('❌ Member tidak valid.');
+    try {
+        await session.sock.groupParticipantsUpdate(state.groupId, [member.id], 'remove');
+        await ctx.editMessageText(`✅ ${member.id.split('@')[0]} berhasil di-kick dari ${state.groupName}.`);
+        clearState(ctx.from.id);
+    } catch (err) {
+        await ctx.editMessageText(`❌ Gagal kick: ${err.message}`);
+    }
+});
+
+tgBot.action('kick_all', async (ctx) => {
+    await ctx.answerCbQuery();
+    const state   = getState(ctx.from.id);
+    const session = userSessions.get(ctx.from.id);
+    if (!state || state.mode !== 'kickmenu') return ctx.editMessageText('❌ Session expired.');
+    if (!session || !session.loggedIn) return ctx.editMessageText('❌ Sesi WA tidak aktif.');
+    await ctx.editMessageText(`⏳ Kick semua ${state.members.length} member dari ${state.groupName}...`);
+    let success = 0, fail = 0;
+    const batchSize = 5;
+    for (let i = 0; i < state.members.length; i += batchSize) {
+        const batch   = state.members.slice(i, i + batchSize).map(m => m.id);
+        try {
+            await session.sock.groupParticipantsUpdate(state.groupId, batch, 'remove');
+            success += batch.length;
+        } catch (err) {
+            fail += batch.length;
+        }
+        if (i + batchSize < state.members.length) await new Promise(r => setTimeout(r, 1000));
+    }
+    await safeReply(ctx, `✅ Kick selesai!\n✅ Berhasil: ${success}\n❌ Gagal: ${fail}`);
+    clearState(ctx.from.id);
+});
+
+tgBot.action('kick_cancel', async (ctx) => {
+    clearState(ctx.from.id);
+    await ctx.editMessageText('✖ Dibatalkan.');
+});
+
+// VCF Add All
+tgBot.action('vcf_add_all', async (ctx) => {
+    await ctx.answerCbQuery();
+    const userId  = ctx.from.id;
+    const pending = vcfPending.get(userId);
+    if (!pending) return safeReply(ctx, '❌ Session expired. Ulangi proses import.');
+    const session = userSessions.get(userId);
+    if (!session || !session.loggedIn) {
+        vcfPending.delete(userId);
+        return safeReply(ctx, '❌ Sesi WA tidak aktif. Login ulang.');
+    }
+    if (!pending.groupId) { vcfPending.delete(userId); return safeReply(ctx, '❌ Grup tidak ditemukan.'); }
+    const contacts = pending.contacts || [];
+    if (contacts.length === 0) { vcfPending.delete(userId); return safeReply(ctx, '❌ Tidak ada kontak.'); }
+
+    await safeReply(ctx, `⏳ Menambahkan ${contacts.length} kontak ke ${pending.groupName}...`);
+    let successCount = 0, failCount = 0;
+    const batchSize = 5;
+    try {
+        for (let i = 0; i < contacts.length; i += batchSize) {
+            const batch     = contacts.slice(i, i + batchSize);
+            const phoneList = batch.map(c => `${c.phone}@s.whatsapp.net`);
+            try {
+                await session.sock.groupParticipantsUpdate(pending.groupId, phoneList, 'add');
+                successCount += batch.length;
+            } catch (err) {
+                failCount += batch.length;
+                log('WARN', 'VcfAddAll', `Batch gagal: ${err.message}`);
+            }
+            if (i + batchSize < contacts.length) await new Promise(r => setTimeout(r, 1000));
+        }
+        await safeReply(ctx, `✅ Import selesai!\n✅ Berhasil: ${successCount}\n❌ Gagal: ${failCount}\n📋 Grup: ${pending.groupName}`);
+    } catch (err) {
+        log('ERROR', 'VcfAddAll', err.message, err);
+        await safeReply(ctx, `❌ Error: ${err.message}`);
+    } finally { vcfPending.delete(userId); }
+});
+
+tgBot.action('vcf_cancel', async (ctx) => {
+    vcfPending.delete(ctx.from.id);
+    await ctx.answerCbQuery('Dibatalkan');
+    await safeReply(ctx, '✖ Import dibatalkan.');
+});
+
+// Admin File Manager
 tgBot.action('adminfile_upload', async (ctx) => {
     if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('⛔ Ditolak.');
     await ctx.answerCbQuery();
@@ -1709,21 +2001,15 @@ tgBot.action('adminfile_list', async (ctx) => {
     await ctx.answerCbQuery();
     try {
         const files = fs.readdirSync(ADMIN_FILES_DIR);
-        if (files.length === 0) {
-            return safeReply(ctx, '📂 Direktori admin kosong.');
-        }
-        let fileList = `📂 *DAFTAR FILE ADMIN*\n${'─'.repeat(30)}\n`;
+        if (files.length === 0) return safeReply(ctx, '📂 Direktori kosong.');
+        let text = `📂 DAFTAR FILE ADMIN\n${'─'.repeat(30)}\n`;
         files.forEach((f, i) => {
-            const filePath = path.join(ADMIN_FILES_DIR, f);
-            const stats    = fs.statSync(filePath);
-            const sizeKB   = (stats.size / 1024).toFixed(1);
-            fileList += `${i + 1}. ${f} (${sizeKB}KB)\n`;
+            const stats = fs.statSync(path.join(ADMIN_FILES_DIR, f));
+            text += `${i + 1}. ${f} (${(stats.size / 1024).toFixed(1)}KB)\n`;
         });
-        fileList += `${'─'.repeat(30)}\nTotal: ${files.length} file`;
-        await safeReply(ctx, fileList);
-    } catch (err) {
-        await safeReply(ctx, `❌ Error: ${err.message}`);
-    }
+        text += `${'─'.repeat(30)}\nTotal: ${files.length} file`;
+        await safeReply(ctx, text);
+    } catch (err) { await safeReply(ctx, `❌ Error: ${err.message}`); }
 });
 
 tgBot.action('adminfile_delete', async (ctx) => {
@@ -1732,34 +2018,25 @@ tgBot.action('adminfile_delete', async (ctx) => {
     try {
         const files = fs.readdirSync(ADMIN_FILES_DIR);
         if (files.length === 0) return safeReply(ctx, '📂 Tidak ada file.');
-
         const buttons = files.map((f, i) => [Markup.button.callback(`🗑️ ${f.substring(0, 30)}`, `adminfiledel_${i}`)]);
         buttons.push([Markup.button.callback('❌ Batal', 'adminfiledel_cancel')]);
-
         setState(ctx.from.id, { mode: 'cvadminfile_delete', fileList: files });
-        await safeReply(ctx, `🗑️ *HAPUS FILE ADMIN*\n\nPilih file:`, { reply_markup: { inline_keyboard: buttons } });
-    } catch (err) {
-        await safeReply(ctx, `❌ Error: ${err.message}`);
-    }
+        await safeReply(ctx, `🗑️ HAPUS FILE ADMIN\n\nPilih file:`, { reply_markup: { inline_keyboard: buttons } });
+    } catch (err) { await safeReply(ctx, `❌ Error: ${err.message}`); }
 });
 
 tgBot.action(/^adminfiledel_(\d+)$/, async (ctx) => {
     if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('⛔ Ditolak.');
     const idx   = parseInt(ctx.match[1]);
     const state = getState(ctx.from.id);
-    if (!state || !state.fileList) return ctx.editMessageText('❌ Session expired.');
-
+    if (!state?.fileList) return ctx.editMessageText('❌ Session expired.');
     const fileName = state.fileList[idx];
     if (!fileName) return ctx.editMessageText('❌ File tidak ditemukan.');
-
     try {
-        const safeName = safeFilename(fileName);
-        fs.unlinkSync(path.join(ADMIN_FILES_DIR, safeName));
+        fs.unlinkSync(path.join(ADMIN_FILES_DIR, safeFilename(fileName)));
         clearState(ctx.from.id);
-        await ctx.editMessageText(`✅ File dihapus: ${safeName}`);
-    } catch (err) {
-        await ctx.editMessageText(`❌ Error: ${err.message}`);
-    }
+        await ctx.editMessageText(`✅ Dihapus: ${fileName}`);
+    } catch (err) { await ctx.editMessageText(`❌ Error: ${err.message}`); }
 });
 
 tgBot.action('adminfiledel_cancel', async (ctx) => {
@@ -1773,15 +2050,11 @@ tgBot.action('adminfile_download', async (ctx) => {
     try {
         const files = fs.readdirSync(ADMIN_FILES_DIR);
         if (files.length === 0) return safeReply(ctx, '📂 Tidak ada file.');
-
         const buttons = files.map((f, i) => [Markup.button.callback(`📥 ${f.substring(0, 30)}`, `adminfiledl_${i}`)]);
         buttons.push([Markup.button.callback('❌ Batal', 'adminfiledl_cancel')]);
-
         setState(ctx.from.id, { mode: 'cvadminfile_download', fileList: files });
-        await safeReply(ctx, `📥 *DOWNLOAD FILE ADMIN*\n\nPilih file:`, { reply_markup: { inline_keyboard: buttons } });
-    } catch (err) {
-        await safeReply(ctx, `❌ Error: ${err.message}`);
-    }
+        await safeReply(ctx, `📥 DOWNLOAD FILE ADMIN\n\nPilih file:`, { reply_markup: { inline_keyboard: buttons } });
+    } catch (err) { await safeReply(ctx, `❌ Error: ${err.message}`); }
 });
 
 tgBot.action(/^adminfiledl_(\d+)$/, async (ctx) => {
@@ -1789,20 +2062,15 @@ tgBot.action(/^adminfiledl_(\d+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const idx   = parseInt(ctx.match[1]);
     const state = getState(ctx.from.id);
-    if (!state || !state.fileList) return ctx.editMessageText('❌ Session expired.');
-
+    if (!state?.fileList) return ctx.editMessageText('❌ Session expired.');
     const fileName = state.fileList[idx];
     if (!fileName) return ctx.editMessageText('❌ File tidak ditemukan.');
-
     try {
         const safeName = safeFilename(fileName);
-        const filePath = path.join(ADMIN_FILES_DIR, safeName);
-        const buffer   = fs.readFileSync(filePath);
+        const buffer   = fs.readFileSync(path.join(ADMIN_FILES_DIR, safeName));
         await sendFile(ctx, buffer, safeName, `📥 File: ${safeName}`);
         clearState(ctx.from.id);
-    } catch (err) {
-        await ctx.editMessageText(`❌ Error: ${esc(err.message)}`);
-    }
+    } catch (err) { await ctx.editMessageText(`❌ Error: ${err.message}`); }
 });
 
 tgBot.action('adminfiledl_cancel', async (ctx) => {
@@ -1810,791 +2078,145 @@ tgBot.action('adminfiledl_cancel', async (ctx) => {
     await ctx.editMessageText('✖ Dibatalkan.');
 });
 
-tgBot.action('vcf_add_all', async (ctx) => {
-    await ctx.answerCbQuery();
-    const userId  = ctx.from.id;
-    const pending = vcfPending.get(userId);
-    if (!pending) return safeReply(ctx, '❌ Session expired. Ulangi proses import.');
-
-    const session = userSessions.get(userId);
-    if (!session || !session.loggedIn) {
-        vcfPending.delete(userId);
-        return safeReply(ctx, '❌ Sesi WA sudah tidak aktif. Silakan login ulang.');
-    }
-
-    if (!pending.groupId) {
-        vcfPending.delete(userId);
-        return safeReply(ctx, '❌ Grup tidak ditemukan. Pilih grup terlebih dahulu.');
-    }
-
-    const contacts = pending.contacts || [];
-    if (contacts.length === 0) {
-        vcfPending.delete(userId);
-        return safeReply(ctx, '❌ Tidak ada kontak untuk ditambahkan.');
-    }
-
-    await safeReply(ctx, `⏳ Menambahkan ${contacts.length} kontak ke grup ${pending.groupName}...`);
-
-    let successCount = 0;
-    let failCount    = 0;
-    const batchSize  = 5;
-
-    try {
-        for (let i = 0; i < contacts.length; i += batchSize) {
-            const batch       = contacts.slice(i, i + batchSize);
-            const phoneList   = batch.map(c => `${c.phone}@s.whatsapp.net`);
-            try {
-                await session.sock.groupParticipantsUpdate(pending.groupId, phoneList, 'add');
-                successCount += batch.length;
-            } catch (err) {
-                failCount += batch.length;
-                log('WARN', 'VcfAddAll', `Batch gagal: ${err.message}`);
-            }
-            if (i + batchSize < contacts.length) {
-                await new Promise(r => setTimeout(r, 1000));
-            }
-        }
-
-        await safeReply(ctx, `✅ Import selesai!\n\n✅ Berhasil: ${successCount}\n❌ Gagal: ${failCount}\n📋 Grup: ${pending.groupName}`);
-    } catch (err) {
-        log('ERROR', 'VcfAddAll', err.message, err);
-        await safeReply(ctx, `❌ Error saat import: ${err.message}`);
-    } finally {
-        vcfPending.delete(userId);
-    }
-});
-
-tgBot.action('vcf_cancel', async (ctx) => {
-    vcfPending.delete(ctx.from.id);
-    await ctx.answerCbQuery('Dibatalkan');
-    await safeReply(ctx, '✖ Import dibatalkan.');
-});
-
-// ========== MENU HANDLERS YANG HILANG ==========
-
-// 🔑 Login WhatsApp
-tgBot.hears('🔑 Login WhatsApp', async (ctx) => {
-    const userId = ctx.from.id;
-    const session = userSessions.get(userId);
-    
-    if (session && session.loggedIn) {
-        return safeReply(ctx, '✅ Anda sudah login WhatsApp.\n\nKetik /logout jika ingin keluar.');
-    }
-    
-    if (loginLocks.has(userId)) {
-        return safeReply(ctx, '⏳ Proses login sedang berjalan. Scan QR Code yang sudah dikirim.');
-    }
-    
-    loginLocks.set(userId, Date.now());
-    
-    await safeReply(ctx, `🔐 *LOGIN WHATSAPP*\n\nBot akan mengirimkan QR Code.\n\n📱 Cara login:\n1. Buka WhatsApp\n2. Klik Menu (3 titik) → Perangkat Tertaut → Tautkan Perangkat\n3. Scan QR Code yang muncul\n\n⏳ QR Code akan dikirim dalam beberapa saat...`);
-    
-    try {
-        const { version, isLatest } = await fetchLatestBaileysVersion();
-        const { state, saveCreds } = await useMultiFileAuthState(path.join(AUTH_BASE_FOLDER, `user_${userId}`));
-        
-        const sock = makeWASocket({
-            version,
-            auth: state,
-            printQRInTerminal: false,
-            logger: pino({ level: 'silent' }),
-            browser: ['WA Kicker Bot', 'Chrome', '1.0.0']
-        });
-        
-        sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect, qr } = update;
-            
-            if (qr) {
-                try {
-                    const qrImage = await QRCode.toBuffer(qr, { type: 'png', width: 300, margin: 2 });
-                    await ctx.replyWithPhoto({ source: qrImage }, { caption: `📱 *SCAN QR CODE INI*\n\n${'─'.repeat(30)}\n1. Buka WhatsApp\n2. Perangkat Tertaut\n3. Tautkan Perangkat\n4. Scan QR Code\n${'─'.repeat(30)}\n⏳ QR Code berlaku 2 menit` });
-                } catch (err) {
-                    await safeReply(ctx, `❌ Gagal generate QR Code: ${err.message}`);
-                }
-                return;
-            }
-            
-            if (connection === 'open') {
-                userSessions.set(userId, { sock, loggedIn: true });
-                loginLocks.delete(userId);
-                const kb = await getKeyboard(userId);
-                await safeReply(ctx, `✅ *BERHASIL LOGIN!*\n\nWhatsApp Anda sekarang terhubung.\n\nGunakan /listgc untuk melihat daftar grup.`, { ...kb });
-            }
-            
-            if (connection === 'close') {
-                loginLocks.delete(userId);
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                if (statusCode !== DisconnectReason.loggedOut) {
-                    userSessions.delete(userId);
-                    await safeReply(ctx, `⚠️ Koneksi WhatsApp terputus. Silakan /login ulang.`);
-                }
-            }
-        });
-        
-        sock.ev.on('creds.update', saveCreds);
-        
-    } catch (err) {
-        loginLocks.delete(userId);
-        log('ERROR', 'Login', err.message, err);
-        await safeReply(ctx, `❌ Gagal login: ${err.message}`);
-    }
-});
-
-// 📊 Status
-tgBot.hears('📊 Status', async (ctx) => {
-    const userId = ctx.from.id;
-    const status = await getUserStatus(userId);
-    const session = userSessions.get(userId);
-    const waStatus = session && session.loggedIn ? '✅ Terhubung' : '❌ Belum Login';
-    
-    let statusText = `📊 *STATUS BOT*\n${'─'.repeat(30)}\n`;
-    statusText += `👤 Status Akun: `;
-    
-    if (isAdmin(userId)) {
-        statusText += `👑 ADMIN\n`;
-    } else if (status === 'regular') {
-        const user = db.getUser(userId);
-        statusText += `⭐ PREMIUM\n📅 Expires: ${formatDate(user.expiresAt)}\n⏳ Sisa: ${formatCountdown(user.expiresAt)}\n`;
-    } else if (status === 'trial') {
-        const user = db.getUser(userId);
-        statusText += `🎁 TRIAL\n📅 Expires: ${formatDate(user.trialExpiresAt)}\n⏳ Sisa: ${formatCountdown(user.trialExpiresAt)}\n`;
-    } else if (status === 'expired') {
-        statusText += `⚠️ EXPIRED\n💳 Silakan /beli untuk perpanjang\n`;
-    } else if (status === 'trial_expired') {
-        statusText += `⚠️ TRIAL HABIS\n💳 Upgrade ke /beli\n`;
-    } else {
-        statusText += `❓ BELUM REGISTER\n🎁 Ketik /start atau coba trial\n`;
-    }
-    
-    statusText += `${'─'.repeat(30)}\n📱 WhatsApp: ${waStatus}\n🤖 Bot: ✅ Aktif\n📅 Server: ${formatDate(new Date().toISOString())}`;
-    
-    await safeReply(ctx, statusText);
-});
-
-// 👤 Akun Saya
-tgBot.hears('👤 Akun Saya', async (ctx) => {
-    const userId = ctx.from.id;
-    const user = db.getUser(userId);
-    
-    if (!user) {
-        return safeReply(ctx, `👤 *AKUN ANDA*\n${'─'.repeat(30)}\n❌ Belum memiliki akun.\n\n🎁 Ketik /start atau pilih 🎁 Coba Gratis (Trial)`);
-    }
-    
-    let profileText = `👤 *AKUN ANDA*\n${'─'.repeat(30)}\n`;
-    profileText += `🆔 ID: ${userId}\n`;
-    profileText += `📧 Username: @${ctx.from.username || '-'}\n`;
-    profileText += `📋 Role: `;
-    
-    if (isAdmin(userId)) profileText += `👑 ADMIN\n`;
-    else if (user.role === 'regular') profileText += `⭐ PREMIUM\n📅 Expires: ${formatDate(user.expiresAt)}\n`;
-    else if (user.role === 'trial') profileText += `🎁 TRIAL\n📅 Expires: ${formatDate(user.trialExpiresAt)}\n`;
-    else profileText += `❓ NONE\n`;
-    
-    profileText += `${'─'.repeat(30)}\n💳 Ketik /beli untuk lihat paket`;
-    
-    await safeReply(ctx, profileText);
-});
-
-// ⭐ Premium
-tgBot.hears('⭐ Premium', async (ctx) => {
-    const paymentText = `⭐ *PREMIUM PACKAGE*\n${'─'.repeat(30)}\n\n💎 *Paket Reguler*\n📅 Masa Aktif: 30 hari\n💰 Harga: ${formatRupiah(50000)}\n\n💎 *Paket Pro*\n📅 Masa Aktif: 90 hari\n💰 Harga: ${formatRupiah(120000)}\n\n💎 *Paket Lifetime*\n📅 Masa Aktif: Selamanya\n💰 Harga: ${formatRupiah(300000)}\n\n${'─'.repeat(30)}\n\n💳 *Pembayaran:*\n🏦 Bank: ${PAYMENT_BANK_NAME}\n📞 No Rek: ${PAYMENT_BANK_NUMBER}\n👤 A.n: ${PAYMENT_BANK_HOLDER}\n\n📱 Dana: ${PAYMENT_DANA}\n\n📩 Konfirmasi: ${PAYMENT_CONTACT}\n\n${'─'.repeat(30)}\nKetik /beli [paket] untuk order\nContoh: /beli 30hari`;
-    
-    await safeReply(ctx, paymentText);
-});
-
-// 📋 Pending Payment (ADMIN ONLY)
-tgBot.hears('📋 Pending Payment', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) {
-        return safeReply(ctx, '⛔ Akses ditolak. Hanya admin.');
-    }
-    
-    const payments = db.getAllPendingPayments();
-    if (payments.length === 0) {
-        return safeReply(ctx, '📋 Tidak ada payment pending.');
-    }
-    
-    let text = `📋 *PENDING PAYMENTS*\n${'─'.repeat(30)}\n`;
-    payments.forEach((p, i) => {
-        text += `${i + 1}. User: ${p.userId}\n   Paket: ${p.package}\n   Jumlah: ${formatRupiah(p.amount)}\n   Tgl: ${formatDate(p.date)}\n\n`;
-    });
-    text += `${'─'.repeat(30)}\nGunakan /confirm [userId] untuk konfirmasi`;
-    
-    await safeReply(ctx, text);
-});
-
-// 👥 User List (ADMIN ONLY)
-tgBot.hears('👥 User List', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) {
-        return safeReply(ctx, '⛔ Akses ditolak. Hanya admin.');
-    }
-    
-    const users = db.getAllUsers();
-    if (users.length === 0) {
-        return safeReply(ctx, '👥 Belum ada user terdaftar.');
-    }
-    
-    let text = `👥 *USER LIST*\n${'─'.repeat(30)}\n`;
-    users.forEach((u, i) => {
-        const role = u.role === 'regular' ? '⭐' : u.role === 'trial' ? '🎁' : '❓';
-        const expiry = u.role === 'regular' ? formatDate(u.expiresAt) : u.role === 'trial' ? formatDate(u.trialExpiresAt) : '-';
-        text += `${i + 1}. ${role} ${u.id}\n   Exp: ${expiry}\n\n`;
-    });
-    text += `${'─'.repeat(30)}\nTotal: ${users.length} user`;
-    
-    if (text.length > 4000) {
-        const buffer = Buffer.from(text, 'utf-8');
-        await sendFile(ctx, buffer, 'user_list.txt', '📋 Daftar user');
-    } else {
-        await safeReply(ctx, text);
-    }
-});
-
-// 🚪 Logout WhatsApp
-tgBot.hears('🚪 Logout WhatsApp', async (ctx) => {
-    const userId = ctx.from.id;
-    const session = userSessions.get(userId);
-    
-    if (!session || !session.loggedIn) {
-        return safeReply(ctx, '❌ Anda belum login WhatsApp.');
-    }
-    
-    try {
-        await session.sock.logout();
-    } catch (err) {}
-    
-    userSessions.delete(userId);
-    const kb = await getKeyboard(userId);
-    await safeReply(ctx, `✅ *LOGOUT BERHASIL*\n\nWhatsApp telah diputus.\n\nKetik /login untuk login kembali.`, { ...kb });
-});
-
-// ========== SISTEM PREMIUM OTOMATIS ==========
-
-// Menu paket yang ditawarkan
-async function showPackages(ctx, userId) {
-    const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('💎 Paket Reguler (30 hari) - Rp 50.000', 'order_reguler')],
-        [Markup.button.callback('💎 Paket Pro (90 hari) - Rp 120.000', 'order_pro')],
-        [Markup.button.callback('💎 Paket Lifetime (Selamanya) - Rp 300.000', 'order_lifetime')],
-        [Markup.button.callback('❌ Batal', 'cancel_order')]
-    ]);
-    
-    await safeReply(ctx, `⭐ *PILIH PAKET PREMIUM*\n\n${'─'.repeat(30)}\n💎 *Paket Reguler*\n📅 30 hari\n💰 Rp 50.000\n\n💎 *Paket Pro*\n📅 90 hari\n💰 Rp 120.000\n\n💎 *Paket Lifetime*\n📅 Selamanya\n💰 Rp 300.000\n${'─'.repeat(30)}\n\nPilih paket yang ingin dibeli:`, { ...keyboard });
-}
-
-// Handler order paket
-tgBot.action('order_reguler', async (ctx) => {
-    await ctx.answerCbQuery();
-    const userId = ctx.from.id;
-    const username = ctx.from.username || ctx.from.first_name || 'User';
-    
-    // Simpan pending order
-    const order = {
-        userId: userId,
-        username: username,
-        package: 'Reguler',
-        duration: 30,
-        price: 50000,
-        date: new Date().toISOString(),
-        status: 'pending'
-    };
-    
-    db.addPendingPayment(order);
-    
-    // Kirim instruksi pembayaran ke user
-    await safeReply(ctx, `✅ *ORDER DITERIMA!*\n\n${'─'.repeat(30)}\n📦 Paket: Reguler (30 hari)\n💰 Total: Rp 50.000\n${'─'.repeat(30)}\n\n💳 *INSTRUKSI PEMBAYARAN:*\n🏦 Bank: ${PAYMENT_BANK_NAME}\n📞 No Rek: ${PAYMENT_BANK_NUMBER}\n👤 A.n: ${PAYMENT_BANK_HOLDER}\n📱 Dana: ${PAYMENT_DANA}\n\n📩 *KONFIRMASI SETELAH BAYAR:*\nKirim bukti transfer ke: ${PAYMENT_CONTACT}\n\n⏳ Admin akan memproses setelah pembayaran dikonfirmasi.`);
-    
-    // Kirim notifikasi ke semua admin
-    for (const adminId of ADMIN_IDS) {
-        try {
-            const adminKeyboard = Markup.inlineKeyboard([
-                [Markup.button.callback('✅ Approve', `approve_${userId}_reguler`), Markup.button.callback('❌ Reject', `reject_${userId}`)]
-            ]);
-            await tgBot.telegram.sendMessage(adminId, `🛒 *ORDER BARU!*\n\n${'─'.repeat(30)}\n👤 User: @${username} (${userId})\n📦 Paket: Reguler (30 hari)\n💰 Harga: Rp 50.000\n📅 Tanggal: ${formatDate(new Date().toISOString())}\n${'─'.repeat(30)}\n\nKlik tombol di bawah untuk memproses:`, { ...adminKeyboard });
-        } catch (err) {
-            log('ERROR', 'Order', `Gagal kirim notifikasi ke admin ${adminId}: ${err.message}`);
-        }
-    }
-});
-
-tgBot.action('order_pro', async (ctx) => {
-    await ctx.answerCbQuery();
-    const userId = ctx.from.id;
-    const username = ctx.from.username || ctx.from.first_name || 'User';
-    
-    const order = {
-        userId: userId,
-        username: username,
-        package: 'Pro',
-        duration: 90,
-        price: 120000,
-        date: new Date().toISOString(),
-        status: 'pending'
-    };
-    
-    db.addPendingPayment(order);
-    
-    await safeReply(ctx, `✅ *ORDER DITERIMA!*\n\n${'─'.repeat(30)}\n📦 Paket: Pro (90 hari)\n💰 Total: Rp 120.000\n${'─'.repeat(30)}\n\n💳 *INSTRUKSI PEMBAYARAN:*\n🏦 Bank: ${PAYMENT_BANK_NAME}\n📞 No Rek: ${PAYMENT_BANK_NUMBER}\n👤 A.n: ${PAYMENT_BANK_HOLDER}\n📱 Dana: ${PAYMENT_DANA}\n\n📩 *KONFIRMASI SETELAH BAYAR:*\nKirim bukti transfer ke: ${PAYMENT_CONTACT}\n\n⏳ Admin akan memproses setelah pembayaran dikonfirmasi.`);
-    
-    for (const adminId of ADMIN_IDS) {
-        try {
-            const adminKeyboard = Markup.inlineKeyboard([
-                [Markup.button.callback('✅ Approve', `approve_${userId}_pro`), Markup.button.callback('❌ Reject', `reject_${userId}`)]
-            ]);
-            await tgBot.telegram.sendMessage(adminId, `🛒 *ORDER BARU!*\n\n${'─'.repeat(30)}\n👤 User: @${username} (${userId})\n📦 Paket: Pro (90 hari)\n💰 Harga: Rp 120.000\n📅 Tanggal: ${formatDate(new Date().toISOString())}\n${'─'.repeat(30)}\n\nKlik tombol di bawah untuk memproses:`, { ...adminKeyboard });
-        } catch (err) {}
-    }
-});
-
-tgBot.action('order_lifetime', async (ctx) => {
-    await ctx.answerCbQuery();
-    const userId = ctx.from.id;
-    const username = ctx.from.username || ctx.from.first_name || 'User';
-    
-    const order = {
-        userId: userId,
-        username: username,
-        package: 'Lifetime',
-        duration: 36500,
-        price: 300000,
-        date: new Date().toISOString(),
-        status: 'pending'
-    };
-    
-    db.addPendingPayment(order);
-    
-    await safeReply(ctx, `✅ *ORDER DITERIMA!*\n\n${'─'.repeat(30)}\n📦 Paket: Lifetime (Selamanya)\n💰 Total: Rp 300.000\n${'─'.repeat(30)}\n\n💳 *INSTRUKSI PEMBAYARAN:*\n🏦 Bank: ${PAYMENT_BANK_NAME}\n📞 No Rek: ${PAYMENT_BANK_NUMBER}\n👤 A.n: ${PAYMENT_BANK_HOLDER}\n📱 Dana: ${PAYMENT_DANA}\n\n📩 *KONFIRMASI SETELAH BAYAR:*\nKirim bukti transfer ke: ${PAYMENT_CONTACT}\n\n⏳ Admin akan memproses setelah pembayaran dikonfirmasi.`);
-    
-    for (const adminId of ADMIN_IDS) {
-        try {
-            const adminKeyboard = Markup.inlineKeyboard([
-                [Markup.button.callback('✅ Approve', `approve_${userId}_lifetime`), Markup.button.callback('❌ Reject', `reject_${userId}`)]
-            ]);
-            await tgBot.telegram.sendMessage(adminId, `🛒 *ORDER BARU!*\n\n${'─'.repeat(30)}\n👤 User: @${username} (${userId})\n📦 Paket: Lifetime (Selamanya)\n💰 Harga: Rp 300.000\n📅 Tanggal: ${formatDate(new Date().toISOString())}\n${'─'.repeat(30)}\n\nKlik tombol di bawah untuk memproses:`, { ...adminKeyboard });
-        } catch (err) {}
-    }
-});
-
-// Approve payment
-tgBot.action(/^approve_(\d+)_(reguler|pro|lifetime)$/, async (ctx) => {
-    if (!isAdmin(ctx.from.id)) {
-        await ctx.answerCbQuery('⛔ Hanya admin!');
-        return;
-    }
-    
-    await ctx.answerCbQuery('✅ Approving...');
-    const userId = parseInt(ctx.match[1]);
-    const packageType = ctx.match[2];
-    
-    let duration = 0;
-    let role = 'regular';
-    
-    if (packageType === 'reguler') {
-        duration = 30;
-    } else if (packageType === 'pro') {
-        duration = 90;
-    } else if (packageType === 'lifetime') {
-        duration = 36500;
-    }
-    
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + duration);
-    
-    const userData = {
-        id: userId,
-        role: role,
-        package: packageType,
-        expiresAt: expiresAt.toISOString(),
-        hadTrial: true,
-        notifiedExpiry: false,
-        updatedAt: new Date().toISOString()
-    };
-    
-    db.saveUser(userData);
-    db.removePendingPayment(userId);
-    
-    await ctx.editMessageText(`✅ *ORDER DISETUJUI!*\n\nUser ${userId} telah diaktifkan paket ${packageType}.\nBerlaku sampai: ${formatDate(expiresAt.toISOString())}`);
-    
-    try {
-        await tgBot.telegram.sendMessage(userId, `✅ *PEMBAYARAN DISETUJUI!*\n\n${'─'.repeat(30)}\n📦 Paket: ${packageType}\n📅 Berlaku sampai: ${formatDate(expiresAt.toISOString())}\n${'─'.repeat(30)}\n\nTerima kasih! Gunakan /start untuk mulai.`);
-    } catch (err) {}
-});
-
-// Reject payment
-tgBot.action(/^reject_(\d+)$/, async (ctx) => {
-    if (!isAdmin(ctx.from.id)) {
-        await ctx.answerCbQuery('⛔ Hanya admin!');
-        return;
-    }
-    
-    await ctx.answerCbQuery('❌ Rejecting...');
-    const userId = parseInt(ctx.match[1]);
-    
-    db.removePendingPayment(userId);
-    
-    await ctx.editMessageText(`❌ *ORDER DITOLAK!*\n\nUser ${userId} - Silakan hubungi admin.`);
-    
-    try {
-        await tgBot.telegram.sendMessage(userId, `❌ *PEMBAYARAN DITOLAK!*\n\nSilakan hubungi admin untuk info lebih lanjut.\n📩 Kontak: ${PAYMENT_CONTACT}`);
-    } catch (err) {}
-});
-
-tgBot.action('cancel_order', async (ctx) => {
-    await ctx.answerCbQuery('Dibatalkan');
-    await ctx.editMessageText('✖ Pemesanan dibatalkan.');
-});
-
-// Tombol beli premium dari menu
-tgBot.hears('⭐ Premium', async (ctx) => {
-    await showPackages(ctx, ctx.from.id);
-});
-
-// Command /beli
-tgBot.command('beli', async (ctx) => {
-    await showPackages(ctx, ctx.from.id);
-});
-
-// ========== USER LIST DENGAN NAMA USER + REVOKE ==========
-tgBot.hears('👥 User List', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) {
-        return safeReply(ctx, '⛔ Akses ditolak. Hanya admin.');
-    }
-    
-    const users = db.getAllUsers();
-    if (users.length === 0) {
-        return safeReply(ctx, '👥 Belum ada user terdaftar.');
-    }
-    
-    // Buat tombol untuk setiap user
-    const buttons = [];
-    for (const u of users) {
-        const username = u.username || u.id;
-        buttons.push([Markup.button.callback(`👤 ${username} (${u.role})`, `userinfo_${u.id}`)]);
-    }
-    buttons.push([Markup.button.callback('❌ Tutup', 'close_userlist')]);
-    
-    await safeReply(ctx, `👥 *DAFTAR USER*\n\nKlik nama user untuk melihat detail dan opsi revoke:`, {
-        reply_markup: { inline_keyboard: buttons }
-    });
-});
-
-// Detail user + tombol revoke
+// User info & revoke
 tgBot.action(/^userinfo_(\d+)$/, async (ctx) => {
-    if (!isAdmin(ctx.from.id)) {
-        await ctx.answerCbQuery('⛔ Hanya admin!');
-        return;
-    }
-    
+    if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('⛔ Hanya admin!');
+    await ctx.answerCbQuery();
     const userId = parseInt(ctx.match[1]);
-    const user = db.getUser(userId);
-    
-    if (!user) {
-        await ctx.answerCbQuery('User tidak ditemukan');
-        return;
-    }
-    
-    // Coba dapatkan username dari Telegram
-    let username = 'Unknown';
-    try {
-        const chat = await tgBot.telegram.getChat(userId);
-        username = chat.username || chat.first_name || userId;
-    } catch (err) {}
-    
-    const expiryDate = user.role === 'regular' ? formatDate(user.expiresAt) : user.role === 'trial' ? formatDate(user.trialExpiresAt) : '-';
-    const roleIcon = user.role === 'regular' ? '⭐' : user.role === 'trial' ? '🎁' : '❓';
-    
-    const keyboard = Markup.inlineKeyboard([
+    const user   = db.getUser(userId);
+    if (!user) return ctx.editMessageText('❌ User tidak ditemukan.');
+    let username = String(userId);
+    try { const chat = await tgBot.telegram.getChat(userId); username = chat.username ? `@${chat.username}` : chat.first_name; } catch (_) {}
+    const expiry    = user.role === 'regular' ? formatDate(user.expiresAt) : user.role === 'trial' ? formatDate(user.trialExpiresAt) : '-';
+    const roleIcon  = user.role === 'regular' ? '⭐' : user.role === 'trial' ? '🎁' : '❓';
+    const keyboard  = Markup.inlineKeyboard([
         [Markup.button.callback('🔴 Revoke Akses', `revoke_${userId}`)],
-        [Markup.button.callback('↩️ Kembali ke daftar', 'back_userlist')]
+        [Markup.button.callback('↩️ Kembali', 'back_userlist')]
     ]);
-    
-    await ctx.editMessageText(`👤 *DETAIL USER*\n${'─'.repeat(30)}\n🆔 ID: ${userId}\n📛 Nama: @${username}\n📋 Role: ${roleIcon} ${user.role}\n📅 Expires: ${expiryDate}\n${'─'.repeat(30)}\n\n⚠️ *Revoke akan menghapus akses user!*`, { ...keyboard });
+    await ctx.editMessageText(`👤 DETAIL USER\n${'─'.repeat(30)}\n🆔 ID: ${userId}\n📛 Nama: ${username}\n📋 Role: ${roleIcon} ${user.role}\n📅 Expires: ${expiry}`, { ...keyboard });
 });
 
-// Revoke akses user
 tgBot.action(/^revoke_(\d+)$/, async (ctx) => {
-    if (!isAdmin(ctx.from.id)) {
-        await ctx.answerCbQuery('⛔ Hanya admin!');
-        return;
-    }
-    
+    if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('⛔ Hanya admin!');
     await ctx.answerCbQuery('🔴 Revoking...');
     const userId = parseInt(ctx.match[1]);
-    const user = db.getUser(userId);
-    
-    if (!user) {
-        await ctx.editMessageText('❌ User tidak ditemukan.');
-        return;
-    }
-    
-    // Hapus user dari database
+    const user   = db.getUser(userId);
+    if (!user) return ctx.editMessageText('❌ User tidak ditemukan.');
     db.deleteUser(userId);
-    
-    // Hapus sesi WA jika ada
     if (userSessions.has(userId)) {
-        const session = userSessions.get(userId);
-        if (session?.sock) {
-            try {
-                await session.sock.logout();
-            } catch (err) {}
-        }
+        try { await userSessions.get(userId)?.sock?.logout(); } catch (_) {}
         userSessions.delete(userId);
     }
-    
-    await ctx.editMessageText(`✅ *REVOKE BERHASIL!*\n\nAkses user @${user.username || userId} telah dicabut.\nUser akan diarahkan ke menu landing.`);
-    
-    try {
-        await tgBot.telegram.sendMessage(userId, `🔴 *AKSES ANDA DICABUT!*\n\nHubungi admin untuk info lebih lanjut.\n📩 Kontak: ${PAYMENT_CONTACT}`);
-    } catch (err) {}
+    await ctx.editMessageText(`✅ Akses user ${userId} dicabut.`);
+    try { await tgBot.telegram.sendMessage(userId, `🔴 Akses Anda dicabut.\nHub. admin: ${PAYMENT_CONTACT}`); } catch (_) {}
 });
 
-// Kembali ke daftar user
 tgBot.action('back_userlist', async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
-    
     const users = db.getAllUsers();
-    if (users.length === 0) {
-        await ctx.editMessageText('👥 Belum ada user terdaftar.');
-        return;
-    }
-    
-    const buttons = [];
-    for (const u of users) {
-        const username = u.username || u.id;
-        buttons.push([Markup.button.callback(`👤 ${username} (${u.role})`, `userinfo_${u.id}`)]);
-    }
-    buttons.push([Markup.button.callback('❌ Tutup', 'close_userlist')]);
-    
-    await ctx.editMessageText(`👥 *DAFTAR USER*\n\nKlik nama user untuk melihat detail dan opsi revoke:`, {
-        reply_markup: { inline_keyboard: buttons }
+    if (users.length === 0) return ctx.editMessageText('👥 Belum ada user.');
+    const buttons = users.slice(0, 30).map(u => {
+        const label = `${u.role === 'regular' ? '⭐' : u.role === 'trial' ? '🎁' : '❓'} ${u.id} (${u.role})`;
+        return [Markup.button.callback(label, `userinfo_${u.id}`)];
     });
+    buttons.push([Markup.button.callback('❌ Tutup', 'close_userlist')]);
+    await ctx.editMessageText(`👥 DAFTAR USER (${users.length})`, { reply_markup: { inline_keyboard: buttons } });
 });
 
-tgBot.action('close_userlist', async (ctx) => {
-    await ctx.deleteMessage();
+tgBot.action('close_userlist', async (ctx) => { try { await ctx.deleteMessage(); } catch (_) {} });
+
+// =============================================
+// ========== PREMIUM / ORDER HANDLERS =========
+// =============================================
+async function showPackages(ctx, userId) {
+    const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('💎 Reguler (30 hari) - Rp 50.000', 'order_reguler')],
+        [Markup.button.callback('💎 Pro (90 hari) - Rp 120.000', 'order_pro')],
+        [Markup.button.callback('💎 Lifetime (Selamanya) - Rp 300.000', 'order_lifetime')],
+        [Markup.button.callback('❌ Batal', 'cancel_order')]
+    ]);
+    await safeReply(ctx, `⭐ PAKET PREMIUM\n${'─'.repeat(30)}\n💎 Reguler  - 30 hari - Rp 50.000\n💎 Pro       - 90 hari - Rp 120.000\n💎 Lifetime  - Selamanya - Rp 300.000\n${'─'.repeat(30)}\n\nPilih paket:`, { ...keyboard });
+}
+
+async function processOrder(ctx, packageType, duration, price, label) {
+    const userId   = ctx.from.id;
+    const username = ctx.from.username || ctx.from.first_name || String(userId);
+    db.addPendingPayment({ userId, username, package: label, duration, price, date: new Date().toISOString() });
+    await safeReply(ctx, `✅ ORDER DITERIMA!\n${'─'.repeat(30)}\n📦 Paket: ${label}\n💰 Total: ${formatRupiah(price)}\n${'─'.repeat(30)}\n\n💳 INSTRUKSI BAYAR:\n🏦 ${PAYMENT_BANK_NAME} - ${PAYMENT_BANK_NUMBER} (${PAYMENT_BANK_HOLDER})\n📱 Dana: ${PAYMENT_DANA}\n\n📩 Konfirmasi ke: ${PAYMENT_CONTACT}`);
+    for (const adminId of ADMIN_IDS) {
+        try {
+            const adminKb = Markup.inlineKeyboard([
+                [Markup.button.callback('✅ Approve', `approve_${userId}_${packageType}`), Markup.button.callback('❌ Reject', `reject_${userId}`)]
+            ]);
+            await tgBot.telegram.sendMessage(adminId,
+                `🛒 ORDER BARU!\n${'─'.repeat(30)}\n👤 User: @${username} (${userId})\n📦 Paket: ${label}\n💰 Harga: ${formatRupiah(price)}\n📅 Tgl: ${formatDate(new Date().toISOString())}`,
+                { ...adminKb });
+        } catch (_) {}
+    }
+}
+
+tgBot.action('order_reguler',  async (ctx) => { await ctx.answerCbQuery(); await processOrder(ctx, 'reguler', 30, 50000, 'Reguler (30 hari)'); });
+tgBot.action('order_pro',      async (ctx) => { await ctx.answerCbQuery(); await processOrder(ctx, 'pro', 90, 120000, 'Pro (90 hari)'); });
+tgBot.action('order_lifetime', async (ctx) => { await ctx.answerCbQuery(); await processOrder(ctx, 'lifetime', 36500, 300000, 'Lifetime'); });
+tgBot.action('cancel_order',   async (ctx) => { await ctx.answerCbQuery('Dibatalkan'); await ctx.editMessageText('✖ Dibatalkan.'); });
+
+tgBot.action(/^approve_(\d+)_(reguler|pro|lifetime)$/, async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('⛔ Hanya admin!');
+    await ctx.answerCbQuery('✅ Approving...');
+    const userId      = parseInt(ctx.match[1]);
+    const packageType = ctx.match[2];
+    const durationMap = { reguler: 30, pro: 90, lifetime: 36500 };
+    const duration    = durationMap[packageType];
+    const expiresAt   = new Date(Date.now() + duration * 24 * 3600000).toISOString();
+    db.saveUser({ id: userId, role: 'regular', package: packageType, expiresAt, hadTrial: 1, notifiedExpiry: 0 });
+    db.removePendingPayment(userId);
+    await ctx.editMessageText(`✅ Disetujui! User ${userId} aktif paket ${packageType} s/d ${formatDate(expiresAt)}.`);
+    try { await tgBot.telegram.sendMessage(userId, `✅ PEMBAYARAN DISETUJUI!\n📦 Paket: ${packageType}\n📅 Berlaku s/d: ${formatDate(expiresAt)}\n\nKetik /start untuk mulai.`); } catch (_) {}
 });
 
-// Command /revoke (manual via command)
-tgBot.command('revoke', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) {
-        return safeReply(ctx, '⛔ Hanya admin!');
-    }
-    
-    const args = ctx.message.text.split(' ');
-    if (args.length < 2) {
-        return safeReply(ctx, `📋 *CARA REVOKE*\n\n/revoke [user_id]\n\nContoh: /revoke 123456789`);
-    }
-    
-    const userId = parseInt(args[1]);
-    if (isNaN(userId)) {
-        return safeReply(ctx, '❌ ID user tidak valid.');
-    }
-    
-    const user = db.getUser(userId);
-    if (!user) {
-        return safeReply(ctx, `❌ User dengan ID ${userId} tidak ditemukan.`);
-    }
-    
-    db.deleteUser(userId);
-    
-    if (userSessions.has(userId)) {
-        const session = userSessions.get(userId);
-        if (session?.sock) {
+tgBot.action(/^reject_(\d+)$/, async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('⛔ Hanya admin!');
+    await ctx.answerCbQuery('❌ Rejecting...');
+    const userId = parseInt(ctx.match[1]);
+    db.removePendingPayment(userId);
+    await ctx.editMessageText(`❌ Order ditolak. User ${userId}.`);
+    try { await tgBot.telegram.sendMessage(userId, `❌ Pembayaran ditolak.\nHub. admin: ${PAYMENT_CONTACT}`); } catch (_) {}
+});
+
+// ========== EXPIRY CHECKER ==========
+setInterval(async () => {
+    const users = db.getAllUsers();
+    const now   = new Date();
+    for (const u of users) {
+        if (u.notifiedExpiry) continue;
+        const expiry = u.role === 'regular' ? u.expiresAt : u.role === 'trial' ? u.trialExpiresAt : null;
+        if (!expiry) continue;
+        const msLeft = new Date(expiry) - now;
+        if (msLeft > 0 && msLeft < 24 * 3600000) {
             try {
-                await session.sock.logout();
-            } catch (err) {}
+                await tgBot.telegram.sendMessage(u.id, `⚠️ Akses ${u.role} kamu akan berakhir dalam ${formatCountdown(expiry)}!\n\nKetik /beli untuk perpanjang.`);
+                db.updateNotifiedFlag(u.id);
+            } catch (_) {}
         }
-        userSessions.delete(userId);
     }
-    
-    await safeReply(ctx, `✅ *REVOKE BERHASIL!*\n\nAkses user ID: ${userId} telah dicabut.`);
-    
-    try {
-        await tgBot.telegram.sendMessage(userId, `🔴 *AKSES ANDA DICABUT!*\n\nHubungi admin untuk info lebih lanjut.\n📩 Kontak: ${PAYMENT_CONTACT}`);
-    } catch (err) {}
-});
+}, 60 * 60 * 1000);
 
-// ========== PERBAIKAN MENU BANTUAN ==========
-tgBot.hears('❓ Bantuan', async (ctx) => {
-    const helpText = `🤖 *WA KICKER BOT - PANDUAN LENGKAP*
-
-${'─'.repeat(30)}
-
-🔧 *FILE TOOLS* (Bisa diakses semua)
-• 🔄 TXT → VCF - Konversi TXT ke VCF
-• 🔄 VCF → TXT - Konversi VCF ke TXT  
-• 📊 XLSX → VCF - Konversi Excel ke VCF
-• 📝 TXT2VCF Auto - Auto detect format
-• 🔗 Gabung TXT - Gabung multiple TXT
-• 🔗 Gabung VCF - Gabung multiple VCF
-• ✂️ Pecah VCF - Pecah per bagian
-• ✂️ Pecah VCF (jlh) - Pecah per jumlah
-• ➕ Tambah Kontak - Tambah kontak ke VCF
-• ➖ Hapus Kontak - Hapus kontak dari VCF
-• 🔢 Hitung Kontak - Hitung jumlah kontak
-• ✏️ Rename Kontak - Rename semua kontak
-• 📝 Rename File - Rename file
-• 📄 Pesan ke TXT - Simpan pesan ke TXT
-• 📸 Rekap Grup - Rekap grup dari foto
-
-${'─'.repeat(30)}
-
-📱 *FITUR WA* (Perlu login)
-• 🔑 Login WhatsApp - Scan QR Code
-• 📋 List Grup WA - Lihat daftar grup
-• 🎯 Pilih Grup - Pilih target grup
-• ➕ Buat Grup WA - Buat grup baru
-• 📥 Import VCF - Import kontak ke grup
-• 🔴 Kick Menu - Kick anggota grup
-• 🚪 Logout WhatsApp - Keluar dari WA
-
-${'─'.repeat(30)}
-
-⭐ *PREMIUM*
-• /beli - Lihat paket premium
-• Paket Reguler (30 hari) - Rp 50.000
-• Paket Pro (90 hari) - Rp 120.000
-• Paket Lifetime (Selamanya) - Rp 300.000
-
-${'─'.repeat(30)}
-
-📋 *PERINTAH DASAR*
-• /start - Mulai bot
-• /done - Selesaikan proses
-• /batal - Batalkan proses
-• /beli - Beli premium
-• /help - Bantuan ini
-
-${'─'.repeat(30)}
-
-💳 *PEMBAYARAN*
-🏦 Bank: ${PAYMENT_BANK_NAME}
-📞 No Rek: ${PAYMENT_BANK_NUMBER}
-👤 A.n: ${PAYMENT_BANK_HOLDER}
-📱 Dana: ${PAYMENT_DANA}
-📩 Konfirmasi: ${PAYMENT_CONTACT}
-
-${'─'.repeat(30)}
-
-⚠️ *CARA PENGGUNAAN FILE TOOLS*
-1. Pilih menu (contoh: 🔗 Gabung TXT)
-2. Kirim file satu per satu
-3. Setelah selesai, ketik /done
-4. Bot akan proses dan kirim hasil
-
-❓ Ada pertanyaan? Hubungi admin: ${PAYMENT_CONTACT}`;
-
-    await safeReply(ctx, helpText);
-});
-
-// Command /help
-tgBot.command('help', async (ctx) => {
-    const helpText = `🤖 *WA KICKER BOT - PANDUAN LENGKAP*
-
-${'─'.repeat(30)}
-
-🔧 *FILE TOOLS* (Bisa diakses semua)
-• 🔄 TXT → VCF - Konversi TXT ke VCF
-• 🔄 VCF → TXT - Konversi VCF ke TXT  
-• 📊 XLSX → VCF - Konversi Excel ke VCF
-• 📝 TXT2VCF Auto - Auto detect format
-• 🔗 Gabung TXT - Gabung multiple TXT
-• 🔗 Gabung VCF - Gabung multiple VCF
-• ✂️ Pecah VCF - Pecah per bagian
-• ✂️ Pecah VCF (jlh) - Pecah per jumlah
-• ➕ Tambah Kontak - Tambah kontak ke VCF
-• ➖ Hapus Kontak - Hapus kontak dari VCF
-• 🔢 Hitung Kontak - Hitung jumlah kontak
-• ✏️ Rename Kontak - Rename semua kontak
-• 📝 Rename File - Rename file
-• 📄 Pesan ke TXT - Simpan pesan ke TXT
-• 📸 Rekap Grup - Rekap grup dari foto
-
-${'─'.repeat(30)}
-
-📱 *FITUR WA* (Perlu login)
-• 🔑 Login WhatsApp - Scan QR Code
-• 📋 List Grup WA - Lihat daftar grup
-• 🎯 Pilih Grup - Pilih target grup
-• ➕ Buat Grup WA - Buat grup baru
-• 📥 Import VCF - Import kontak ke grup
-• 🔴 Kick Menu - Kick anggota grup
-• 🚪 Logout WhatsApp - Keluar dari WA
-
-${'─'.repeat(30)}
-
-⭐ *PREMIUM*
-• /beli - Lihat paket premium
-
-${'─'.repeat(30)}
-
-📋 *PERINTAH DASAR*
-• /start - Mulai bot
-• /done - Selesaikan proses
-• /batal - Batalkan proses
-• /beli - Beli premium
-• /help - Bantuan ini
-
-${'─'.repeat(30)}
-
-⚠️ *CARA PENGGUNAAN*
-1. Pilih menu file tools
-2. Kirim file
-3. Ketik /done
-4. Hasil akan dikirim
-
-❓ Pertanyaan? Hubungi admin: ${PAYMENT_CONTACT}`;
-
-    await safeReply(ctx, helpText);
-});
-
-// ========== HELP ==========
-tgBot.command('help', async (ctx) => {
-    const helpText = [
-        '🤖 WA Kicker Bot - Panduan',
-        '',
-        '🔧 FILE TOOLS (bisa diakses semua):',
-        '/cv_txt_to_vcf - Convert TXT ke VCF',
-        '/cv_vcf_to_txt - Convert VCF ke TXT',
-        '/cv_xlsx_to_vcf - Convert XLSX ke VCF',
-        '/txt2vcf - TXT ke VCF auto-detect',
-        '/gabungtxt - Gabung multiple TXT',
-        '/gabungvcf - Gabung multiple VCF',
-        '/pecahfile - Pecah VCF per bagian',
-        '/pecahctc [n] - Pecah VCF per jumlah kontak',
-        '/addctc - Tambah kontak ke VCF',
-        '/delctc - Hapus kontak dari VCF',
-        '/hitungctc - Hitung kontak VCF',
-        '/renamectc - Rename kontak VCF',
-        '/renamefile [nama] - Rename file',
-        '/totxt - Simpan pesan ke TXT',
-        '/rekapgroup - Rekap grup dari foto',
-        '',
-        '📱 FITUR WA (perlu login & akses):',
-        '/login - Login WhatsApp',
-        '/listgc - List semua grup',
-        '/groups - Lihat grup WA',
-        '/select - Pilih grup',
-        '/buatgrup - Buat grup WA',
-        '/importvcf - Import VCF ke grup',
-        '/kickmenu - Kick anggota grup',
-        '',
-        'Ketik /done untuk selesaikan proses.',
-        'Ketik /batal untuk batalkan.'
-    ].join('\n');
-
-    await safeReply(ctx, helpText);
-});
-
-// ========== HEALTH CHECK ==========
+// ========== HEALTH CHECK — FIX: validasi API key ==========
 const PORT = process.env.PORT || 8080;
 http.createServer((req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
 
     if (url.pathname === '/health') {
+        const key = url.searchParams.get('key') || req.headers['x-api-key'];
+        if (key !== HEALTH_API_KEY) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Unauthorized' }));
+            return;
+        }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
             status:    'ok',
-            bot:       'WA Kicker Bot v6.3.0',
+            bot:       'WA Kicker Bot v6.4.0',
             uptime:    Math.floor(process.uptime()) + 's',
             timestamp: new Date().toISOString(),
             sessions:  userSessions.size,
@@ -2604,12 +2226,9 @@ http.createServer((req, res) => {
         return;
     }
 
+    // Root endpoint — no auth needed
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-        status:    'ok',
-        uptime:    Math.floor(process.uptime()) + 's',
-        timestamp: new Date().toISOString()
-    }));
+    res.end(JSON.stringify({ status: 'ok', uptime: Math.floor(process.uptime()) + 's', timestamp: new Date().toISOString() }));
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`🌐 Health check aktif di port ${PORT}`);
 });
@@ -2621,7 +2240,6 @@ async function gracefulShutdown(signal) {
     const closePromises = [];
     for (const [userId, session] of userSessions.entries()) {
         if (session?.sock) {
-            log('INFO', 'Shutdown', `Menutup sesi WA user ${userId}`);
             closePromises.push(
                 Promise.race([
                     session.sock.logout().catch(() => session.sock.end(new Error('shutdown'))),
@@ -2637,34 +2255,28 @@ async function gracefulShutdown(signal) {
 
 process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('unhandledRejection', (reason) => log('ERROR', 'UnhandledRejection', `${reason}`));
+process.on('uncaughtException',  (err)    => log('ERROR', 'UncaughtException', err.message, err));
 
-process.on('unhandledRejection', (reason, promise) => {
-    log('ERROR', 'UnhandledRejection', `Promise: ${promise}, Reason: ${reason}`);
-});
-
-process.on('uncaughtException', (err) => {
-    log('ERROR', 'UncaughtException', err.message, err);
-});
-
+// ========== LAUNCH ==========
 tgBot.launch().then(() => {
     console.log('\n╔══════════════════════════════════════════╗');
-    console.log('║  WA KICKER BOT v6.3.0 - ALL FIXED       ║');
-    console.log('║  NO-SPAM + XLSX SUPPORT                  ║');
+    console.log('║  WA KICKER BOT v6.4.0 - READY TO DEPLOY ║');
     console.log('╚══════════════════════════════════════════╝\n');
-    console.log(`📋 Admin IDs  : ${ADMIN_IDS.join(', ')}`);
-    console.log(`📁 Data dir   : ${DATA_DIR}`);
-    console.log(`📦 Max file   : ${MAX_FILE_SIZE_MB}MB`);
-    console.log(`👥 Max kontak : ${MAX_CONTACTS_PER_FILE.toLocaleString()}/file`);
-    console.log(`⏱️  DL timeout : ${DOWNLOAD_TIMEOUT_MS / 1000}s`);
-    console.log(`\n✨ SEMUA FITUR SUDAH DI-FIX:`);
-    console.log(`   - TXT → VCF (NO-SPAM)`);
-    console.log(`   - VCF → TXT (NO-SPAM)`);
-    console.log(`   - GABUNG TXT/VCF (NO-SPAM)`);
-    console.log(`   - PECAH VCF (NO-SPAM)`);
-    console.log(`   - TAMBAH/HAPUS KONTAK (NO-SPAM)`);
-    console.log(`   - RENAME KONTAK (NO-SPAM)`);
-    console.log(`   - XLSX → VCF: ${XLSX ? '✅ AKTIF' : '❌ INSTALL xlsx'}`);
-    console.log(`\n🚀 Bot siap digunakan!\n`);
+    console.log(`📋 Admin IDs   : ${ADMIN_IDS.join(', ')}`);
+    console.log(`📁 Data dir    : ${DATA_DIR}`);
+    console.log(`📦 Max file    : ${MAX_FILE_SIZE_MB}MB`);
+    console.log(`👥 Max kontak  : ${MAX_CONTACTS_PER_FILE.toLocaleString()}/file`);
+    console.log(`⏱️  DL timeout  : ${DOWNLOAD_TIMEOUT_MS / 1000}s`);
+    console.log(`📊 XLSX support: ${XLSX ? '✅ AKTIF' : '❌ npm install xlsx'}`);
+    console.log('\n✅ SEMUA FIX v6.4.0:');
+    console.log('   [1] Duplikat hears/command dihapus');
+    console.log('   [2] Emoji Status 📡 → 📊 (konsisten)');
+    console.log('   [3] Handler WA lengkap: Pilih Grup, Buat Grup, Import, Kick');
+    console.log('   [4] Health /health endpoint dilindungi API key');
+    console.log('   [5] Konfirmasi per-file saat batch upload');
+    console.log('   [6] Premium handler dipersatukan, tidak duplikat');
+    console.log('\n🚀 Bot siap digunakan!\n');
 }).catch(err => {
     console.error('❌ Gagal launch bot:', err.message);
     process.exit(1);
