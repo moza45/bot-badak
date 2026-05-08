@@ -14,8 +14,8 @@ const crypto = require('crypto');
 const http = require('http');
 
 // ╔══════════════════════════════════════════════════════════════╗
-// ║         W A - K I C K E R   B O T   v 7 . 0 . 0            ║
-// ║           PREMIUM SYSTEM + NO-SPAM + ALL FIXED              ║
+// ║         W A - K I C K E R   B O T   v 6 . 3 . 0            ║
+// ║           NO-SPAM + ALL FIXED                               ║
 // ╚══════════════════════════════════════════════════════════════╝
 
 // ========== KONFIGURASI AWAL ==========
@@ -70,7 +70,7 @@ try {
     XLSX = require('xlsx');
     console.log('✅ xlsx package loaded successfully');
 } catch (e) {
-    console.log('⚠️  xlsx package tidak terinstall. Fitur XLSX → VCF tidak akan berfungsi.');
+    console.log('⚠️  xlsx package tidak terinstall. Fitur /cv_xlsx_to_vcf tidak akan berfungsi.');
 }
 
 // ========== DATABASE JSON ==========
@@ -227,8 +227,6 @@ async function getUserStatus(userId) {
     if (u.role === 'trial') {
         return new Date(u.trialExpiresAt) > new Date() ? 'trial' : 'trial_expired';
     }
-    if (u.role === 'expired') return 'expired';
-    if (u.role === 'trial_expired') return 'trial_expired';
     return 'none';
 }
 
@@ -566,503 +564,27 @@ async function getKeyboard(userId) {
     return KB_LANDING;
 }
 
-// ========== PREMIUM SYSTEM WITH BUTTONS ==========
-
-// Data paket
-const PREMIUM_PACKAGES = {
-    '30hari': { name: 'Paket Reguler', duration: 30, price: 50000, priceFormatted: 'Rp 50.000' },
-    '90hari': { name: 'Paket Pro', duration: 90, price: 120000, priceFormatted: 'Rp 120.000' },
-    'lifetime': { name: 'Paket Lifetime', duration: 9999, price: 300000, priceFormatted: 'Rp 300.000' }
-};
-
-// Menu pilihan paket dengan tombol
-async function showPackageMenu(ctx) {
-    const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('💎 Paket Reguler (30 hari) - Rp 50.000', 'order_30hari')],
-        [Markup.button.callback('💎 Paket Pro (90 hari) - Rp 120.000', 'order_90hari')],
-        [Markup.button.callback('💎 Paket Lifetime (Selamanya) - Rp 300.000', 'order_lifetime')],
-        [Markup.button.callback('❌ Batal', 'order_cancel')]
-    ]);
-    
-    await safeReply(ctx, `⭐ *PILIH PAKET PREMIUM*\n\n${'─'.repeat(30)}\nPilih paket yang ingin dibeli:\n\n💎 *Paket Reguler* - 30 hari\n💰 Rp 50.000\n\n💎 *Paket Pro* - 90 hari\n💰 Rp 120.000\n\n💎 *Paket Lifetime* - Selamanya\n💰 Rp 300.000\n${'─'.repeat(30)}`, keyboard);
+async function requireAccess(ctx, next) {
+    const userId = ctx.from?.id;
+    if (!userId) return;
+    if (isAdmin(userId)) return next();
+    const status = await getUserStatus(userId);
+    if (status === 'regular' || status === 'trial') return next();
+    if (status === 'expired') {
+        return safeReply(ctx, `╔══════════════════════╗\n║  AKSES BERAKHIR\n╚══════════════════════╝\n\nPaket kamu sudah expired.\nPerpanjang sekarang!\n\nKetik /beli untuk lihat paket.`, { ...KB_LANDING });
+    }
+    if (status === 'trial_expired') {
+        return safeReply(ctx, `╔══════════════════════╗\n║  TRIAL BERAKHIR\n╚══════════════════════╝\n\nMasa trial kamu sudah habis.\nUpgrade ke paket reguler!\n\nKetik /beli untuk lihat paket.`, { ...KB_LANDING });
+    }
+    await safeReply(ctx, `╔══════════════════════╗\n║  AKSES DITOLAK\n╚══════════════════════╝\n\nBot ini berbayar.\n\n🎁 Coba gratis ${TRIAL_DURATION_HOURS} jam\n💳 Atau langsung beli paket`, { ...KB_LANDING });
 }
 
-// Handler order paket
-tgBot.action(/^order_(30hari|90hari|lifetime)$/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const userId = ctx.from.id;
-    const username = ctx.from.username || ctx.from.first_name || 'User';
-    const packageKey = ctx.match[1];
-    const pkg = PREMIUM_PACKAGES[packageKey];
-    
-    if (!pkg) {
-        return ctx.editMessageText('❌ Paket tidak valid.');
-    }
-    
-    const orderId = Date.now();
-    const order = {
-        id: orderId,
-        userId: userId,
-        username: username,
-        packageKey: packageKey,
-        packageName: pkg.name,
-        duration: pkg.duration,
-        price: pkg.price,
-        priceFormatted: pkg.priceFormatted,
-        status: 'pending',
-        date: new Date().toISOString()
-    };
-    
-    db.addPendingPayment(order);
-    
-    const userMessage = `✅ *ORDER DITERIMA*\n\n${'─'.repeat(30)}\n📦 Paket: ${pkg.name}\n💰 Harga: ${pkg.priceFormatted}\n📅 Durasi: ${pkg.duration === 9999 ? 'Selamanya' : pkg.duration + ' hari'}\n${'─'.repeat(30)}\n\n💳 *INSTRUKSI PEMBAYARAN:*\n🏦 Bank: ${PAYMENT_BANK_NAME}\n📞 No Rek: ${PAYMENT_BANK_NUMBER}\n👤 A.n: ${PAYMENT_BANK_HOLDER}\n📱 Dana: ${PAYMENT_DANA}\n\n📩 Konfirmasi ke: ${PAYMENT_CONTACT}\n\n⏳ Menunggu konfirmasi pembayaran dari admin.`;
-    
-    await ctx.editMessageText(userMessage);
-    
-    for (const adminId of ADMIN_IDS) {
-        try {
-            const adminKeyboard = Markup.inlineKeyboard([
-                [Markup.button.callback('✅ Approve', `approve_${orderId}`), Markup.button.callback('❌ Reject', `reject_${orderId}`)]
-            ]);
-            
-            await tgBot.telegram.sendMessage(adminId, `🛒 *ORDER BARU!*\n\n${'─'.repeat(30)}\n👤 User: ${username} (${userId})\n📦 Paket: ${pkg.name}\n💰 Harga: ${pkg.priceFormatted}\n📅 Durasi: ${pkg.duration === 9999 ? 'Selamanya' : pkg.duration + ' hari'}\n📅 Tanggal: ${formatDate(new Date().toISOString())}\n${'─'.repeat(30)}\n\nKlik tombol di bawah untuk konfirmasi:`, adminKeyboard);
-        } catch (err) {
-            log('ERROR', 'Premium', `Gagal kirim notif ke admin ${adminId}: ${err.message}`);
-        }
-    }
-    
-    await safeReply(ctx, `📢 *NOTIFIKASI TELAH DIKIRIM KE ADMIN*\n\nSilakan lakukan pembayaran dan konfirmasi ke admin.\n\nAdmin akan mengaktifkan paket setelah pembayaran diverifikasi.`);
-});
+// ========== FILE HANDLERS (NO-SPAM VERSION) ==========
 
-// Handler Approve
-tgBot.action(/^approve_(\d+)$/, async (ctx) => {
-    await ctx.answerCbQuery();
-    
-    if (!isAdmin(ctx.from.id)) {
-        return ctx.editMessageText('⛔ Akses ditolak. Hanya admin.');
-    }
-    
-    const orderId = parseInt(ctx.match[1]);
-    const payments = db.getAllPendingPayments();
-    const order = payments.find(p => p.id === orderId);
-    
-    if (!order) {
-        return ctx.editMessageText('❌ Order tidak ditemukan atau sudah diproses.');
-    }
-    
-    const userId = order.userId;
-    const pkg = PREMIUM_PACKAGES[order.packageKey];
-    
-    let user = db.getUser(userId);
-    if (!user) {
-        user = { id: userId, role: 'regular', hadTrial: 1, notifiedExpiry: 0 };
-    }
-    
-    let expiresAt;
-    if (pkg.duration === 9999) {
-        expiresAt = new Date('2099-12-31').toISOString();
-    } else {
-        expiresAt = new Date();
-        expiresAt.setDate(expiresAt.getDate() + pkg.duration);
-        expiresAt = expiresAt.toISOString();
-    }
-    
-    user.role = 'regular';
-    user.expiresAt = expiresAt;
-    user.package = pkg.name;
-    user.activatedAt = new Date().toISOString();
-    
-    db.saveUser(user);
-    db.removePendingPayment(userId);
-    
-    try {
-        await tgBot.telegram.sendMessage(userId, `🎉 *PEMBAYARAN DIKONFIRMASI!*\n\n${'─'.repeat(30)}\n✅ Paket ${pkg.name} telah aktif!\n📅 Berlaku hingga: ${formatDate(expiresAt)}\n${'─'.repeat(30)}\n\nTerima kasih telah menggunakan layanan kami! 🚀`);
-    } catch (err) {
-        log('ERROR', 'Approve', `Gagal kirim notif ke user ${userId}: ${err.message}`);
-    }
-    
-    await ctx.editMessageText(`✅ *ORDER DIAPPROVE*\n\n👤 User: ${order.username} (${userId})\n📦 Paket: ${pkg.name}\n📅 Expires: ${formatDate(expiresAt)}\n\nUser telah mendapatkan akses premium.`);
-});
-
-// Handler Reject
-tgBot.action(/^reject_(\d+)$/, async (ctx) => {
-    await ctx.answerCbQuery();
-    
-    if (!isAdmin(ctx.from.id)) {
-        return ctx.editMessageText('⛔ Akses ditolak. Hanya admin.');
-    }
-    
-    const orderId = parseInt(ctx.match[1]);
-    const payments = db.getAllPendingPayments();
-    const order = payments.find(p => p.id === orderId);
-    
-    if (!order) {
-        return ctx.editMessageText('❌ Order tidak ditemukan atau sudah diproses.');
-    }
-    
-    db.removePendingPayment(order.userId);
-    
-    try {
-        await tgBot.telegram.sendMessage(order.userId, `❌ *PEMBAYARAN DITOLAK*\n\n${'─'.repeat(30)}\nMohon periksa kembali pembayaran Anda.\n\nSilakan order ulang atau hubungi admin: ${PAYMENT_CONTACT}\n${'─'.repeat(30)}`);
-    } catch (err) {
-        log('ERROR', 'Reject', `Gagal kirim notif ke user ${order.userId}: ${err.message}`);
-    }
-    
-    await ctx.editMessageText(`❌ *ORDER DIREJECT*\n\n👤 User: ${order.username} (${order.userId})\n📦 Paket: ${order.packageName}\n\nOrder telah dibatalkan.`);
-});
-
-// Cancel order
-tgBot.action('order_cancel', async (ctx) => {
-    await ctx.answerCbQuery('Dibatalkan');
-    await ctx.editMessageText('✖ Pembelian dibatalkan.\n\nKetik /beli untuk order lagi.');
-});
-
-// ========== MENU HANDLERS ==========
-
-// 🔑 Login WhatsApp
-tgBot.hears('🔑 Login WhatsApp', async (ctx) => {
-    const userId = ctx.from.id;
-    const session = userSessions.get(userId);
-    
-    if (session && session.loggedIn) {
-        return safeReply(ctx, '✅ Anda sudah login WhatsApp.\n\nKetik /logout jika ingin keluar.');
-    }
-    
-    if (loginLocks.has(userId)) {
-        return safeReply(ctx, '⏳ Proses login sedang berjalan. Scan QR Code yang sudah dikirim.');
-    }
-    
-    loginLocks.set(userId, Date.now());
-    
-    await safeReply(ctx, `🔐 *LOGIN WHATSAPP*\n\nBot akan mengirimkan QR Code.\n\n📱 Cara login:\n1. Buka WhatsApp\n2. Klik Menu (3 titik) → Perangkat Tertaut → Tautkan Perangkat\n3. Scan QR Code yang muncul\n\n⏳ QR Code akan dikirim dalam beberapa saat...`);
-    
-    try {
-        const { version, isLatest } = await fetchLatestBaileysVersion();
-        const { state, saveCreds } = await useMultiFileAuthState(path.join(AUTH_BASE_FOLDER, `user_${userId}`));
-        
-        const sock = makeWASocket({
-            version,
-            auth: state,
-            printQRInTerminal: false,
-            logger: pino({ level: 'silent' }),
-            browser: ['WA Kicker Bot', 'Chrome', '1.0.0']
-        });
-        
-        sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect, qr } = update;
-            
-            if (qr) {
-                try {
-                    const qrImage = await QRCode.toBuffer(qr, { type: 'png', width: 300, margin: 2 });
-                    await ctx.replyWithPhoto({ source: qrImage }, { caption: `📱 *SCAN QR CODE INI*\n\n${'─'.repeat(30)}\n1. Buka WhatsApp\n2. Perangkat Tertaut\n3. Tautkan Perangkat\n4. Scan QR Code\n${'─'.repeat(30)}\n⏳ QR Code berlaku 2 menit` });
-                } catch (err) {
-                    await safeReply(ctx, `❌ Gagal generate QR Code: ${err.message}`);
-                }
-                return;
-            }
-            
-            if (connection === 'open') {
-                userSessions.set(userId, { sock, loggedIn: true });
-                loginLocks.delete(userId);
-                const kb = await getKeyboard(userId);
-                await safeReply(ctx, `✅ *BERHASIL LOGIN!*\n\nWhatsApp Anda sekarang terhubung.\n\nGunakan /listgc untuk melihat daftar grup.`, { ...kb });
-            }
-            
-            if (connection === 'close') {
-                loginLocks.delete(userId);
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                if (statusCode !== DisconnectReason.loggedOut) {
-                    userSessions.delete(userId);
-                    await safeReply(ctx, `⚠️ Koneksi WhatsApp terputus. Silakan /login ulang.`);
-                }
-            }
-        });
-        
-        sock.ev.on('creds.update', saveCreds);
-        
-    } catch (err) {
-        loginLocks.delete(userId);
-        log('ERROR', 'Login', err.message, err);
-        await safeReply(ctx, `❌ Gagal login: ${err.message}`);
-    }
-});
-
-// 🚪 Logout WhatsApp
-tgBot.hears('🚪 Logout WhatsApp', async (ctx) => {
-    const userId = ctx.from.id;
-    const session = userSessions.get(userId);
-    
-    if (!session || !session.loggedIn) {
-        return safeReply(ctx, '❌ Anda belum login WhatsApp.');
-    }
-    
-    try {
-        await session.sock.logout();
-    } catch (err) {}
-    
-    userSessions.delete(userId);
-    const kb = await getKeyboard(userId);
-    await safeReply(ctx, `✅ *LOGOUT BERHASIL*\n\nWhatsApp telah diputus.\n\nKetik /login untuk login kembali.`, { ...kb });
-});
-
-// 📊 Status
-tgBot.hears('📊 Status', async (ctx) => {
-    const userId = ctx.from.id;
-    const status = await getUserStatus(userId);
-    const session = userSessions.get(userId);
-    const waStatus = session && session.loggedIn ? '✅ Terhubung' : '❌ Belum Login';
-    
-    let statusText = `📊 *STATUS BOT*\n${'─'.repeat(30)}\n👤 Status Akun: `;
-    
-    if (isAdmin(userId)) {
-        statusText += `👑 ADMIN\n`;
-    } else if (status === 'regular') {
-        const user = db.getUser(userId);
-        statusText += `⭐ PREMIUM\n📅 Expires: ${formatDate(user.expiresAt)}\n⏳ Sisa: ${formatCountdown(user.expiresAt)}\n`;
-    } else if (status === 'trial') {
-        const user = db.getUser(userId);
-        statusText += `🎁 TRIAL\n📅 Expires: ${formatDate(user.trialExpiresAt)}\n⏳ Sisa: ${formatCountdown(user.trialExpiresAt)}\n`;
-    } else if (status === 'expired') {
-        statusText += `⚠️ EXPIRED\n💳 Silakan /beli untuk perpanjang\n`;
-    } else if (status === 'trial_expired') {
-        statusText += `⚠️ TRIAL HABIS\n💳 Upgrade ke /beli\n`;
-    } else {
-        statusText += `❓ BELUM REGISTER\n🎁 Ketik /start atau coba trial\n`;
-    }
-    
-    statusText += `${'─'.repeat(30)}\n📱 WhatsApp: ${waStatus}\n🤖 Bot: ✅ Aktif\n📅 Server: ${formatDate(new Date().toISOString())}`;
-    
-    await safeReply(ctx, statusText);
-});
-
-// 👤 Akun Saya
-tgBot.hears('👤 Akun Saya', async (ctx) => {
-    const userId = ctx.from.id;
-    const user = db.getUser(userId);
-    
-    if (!user) {
-        return safeReply(ctx, `👤 *AKUN ANDA*\n${'─'.repeat(30)}\n❌ Belum memiliki akun.\n\n🎁 Ketik /start atau pilih 🎁 Coba Gratis (Trial)`);
-    }
-    
-    let profileText = `👤 *AKUN ANDA*\n${'─'.repeat(30)}\n`;
-    profileText += `🆔 ID: ${userId}\n`;
-    profileText += `📧 Username: @${ctx.from.username || '-'}\n`;
-    profileText += `📋 Role: `;
-    
-    if (isAdmin(userId)) profileText += `👑 ADMIN\n`;
-    else if (user.role === 'regular') profileText += `⭐ PREMIUM\n📅 Expires: ${formatDate(user.expiresAt)}\n`;
-    else if (user.role === 'trial') profileText += `🎁 TRIAL\n📅 Expires: ${formatDate(user.trialExpiresAt)}\n`;
-    else profileText += `❓ NONE\n`;
-    
-    profileText += `${'─'.repeat(30)}\n💳 Ketik /beli untuk lihat paket`;
-    
-    await safeReply(ctx, profileText);
-});
-
-// ⭐ Premium
-tgBot.hears('⭐ Premium', async (ctx) => {
-    await showPackageMenu(ctx);
-});
-
-// 📋 Pending Payment (ADMIN ONLY)
-tgBot.hears('📋 Pending Payment', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) {
-        return safeReply(ctx, '⛔ Akses ditolak. Hanya admin.');
-    }
-    
-    const payments = db.getAllPendingPayments();
-    if (payments.length === 0) {
-        return safeReply(ctx, '📋 Tidak ada payment pending.');
-    }
-    
-    for (const payment of payments) {
-        const keyboard = Markup.inlineKeyboard([
-            [Markup.button.callback('✅ Approve', `approve_${payment.id}`), Markup.button.callback('❌ Reject', `reject_${payment.id}`)]
-        ]);
-        
-        await safeReply(ctx, `🛒 *PENDING PAYMENT*\n${'─'.repeat(30)}\n🆔 Order ID: ${payment.id}\n👤 User: ${payment.username} (${payment.userId})\n📦 Paket: ${payment.packageName}\n💰 Harga: ${payment.priceFormatted}\n📅 Tanggal: ${formatDate(payment.date)}\n${'─'.repeat(30)}`, keyboard);
-    }
-});
-
-// 👥 User List (ADMIN ONLY) dengan Username dan Revoke
-tgBot.hears('👥 User List', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) {
-        return safeReply(ctx, '⛔ Akses ditolak. Hanya admin.');
-    }
-    
-    const users = db.getAllUsers();
-    if (users.length === 0) {
-        return safeReply(ctx, '👥 Belum ada user terdaftar.');
-    }
-    
-    let userListText = `👥 *USER LIST*\n${'─'.repeat(30)}\n\n`;
-    
-    for (let i = 0; i < users.length; i++) {
-        const user = users[i];
-        const userId = user.id;
-        
-        let username = 'Unknown';
-        try {
-            const chat = await tgBot.telegram.getChat(userId);
-            username = chat.username || chat.first_name || userId.toString();
-        } catch (err) {
-            username = userId.toString();
-        }
-        
-        const role = user.role === 'regular' ? '⭐ PREMIUM' : user.role === 'trial' ? '🎁 TRIAL' : '❌ EXPIRED';
-        const expiry = user.role === 'regular' ? formatDate(user.expiresAt) : user.role === 'trial' ? formatDate(user.trialExpiresAt) : '-';
-        const packageName = user.package || '-';
-        
-        userListText += `${i+1}. *${username}*\n`;
-        userListText += `   🆔 ID: ${userId}\n`;
-        userListText += `   📋 Role: ${role}\n`;
-        userListText += `   📦 Paket: ${packageName}\n`;
-        userListText += `   📅 Expires: ${expiry}\n\n`;
-    }
-    
-    userListText += `${'─'.repeat(30)}\n📊 Total: ${users.length} user`;
-    
-    if (userListText.length > 4000) {
-        const buffer = Buffer.from(userListText, 'utf-8');
-        await sendFile(ctx, buffer, 'user_list.txt', '📋 Daftar user');
-    } else {
-        await safeReply(ctx, userListText);
-    }
-    
-    // Tombol revoke untuk setiap user
-    const revokeButtons = [];
-    for (const user of users) {
-        let username = user.id.toString();
-        try {
-            const chat = await tgBot.telegram.getChat(user.id);
-            username = chat.username || chat.first_name || user.id.toString();
-        } catch (err) {}
-        
-        revokeButtons.push([Markup.button.callback(`🚫 Revoke ${username.substring(0, 20)}`, `revoke_${user.id}`)]);
-    }
-    
-    if (revokeButtons.length > 0) {
-        await safeReply(ctx, `🔧 *MANAGE USER*\n\nPilih user untuk dicabut aksesnya:`, { reply_markup: { inline_keyboard: revokeButtons } });
-    }
-});
-
-// Handler Revoke
-tgBot.action(/^revoke_(\d+)$/, async (ctx) => {
-    await ctx.answerCbQuery();
-    
-    if (!isAdmin(ctx.from.id)) {
-        return ctx.reply('⛔ Akses ditolak. Hanya admin.');
-    }
-    
-    const targetUserId = parseInt(ctx.match[1]);
-    const user = db.getUser(targetUserId);
-    
-    if (!user) {
-        return ctx.reply('❌ User tidak ditemukan.');
-    }
-    
-    let username = 'User';
-    try {
-        const chat = await tgBot.telegram.getChat(targetUserId);
-        username = chat.username || chat.first_name || targetUserId.toString();
-    } catch (err) {}
-    
-    if (user.role === 'regular') {
-        user.role = 'expired';
-        user.expiresAt = new Date().toISOString();
-        db.saveUser(user);
-        
-        try {
-            await tgBot.telegram.sendMessage(targetUserId, `⚠️ *AKSES ANDA DICABUT*\n\n${'─'.repeat(30)}\nAkses premium Anda telah dicabut oleh admin.\n\nSilakan hubungi admin untuk informasi lebih lanjut: ${PAYMENT_CONTACT}\n${'─'.repeat(30)}`);
-        } catch (err) {}
-        
-        await ctx.reply(`✅ *AKSES DICABUT*\n\n👤 User: ${username} (${targetUserId})\n📋 Status: PREMIUM → EXPIRED\n\nUser telah kehilangan akses premium.`);
-    } else if (user.role === 'trial') {
-        user.role = 'trial_expired';
-        user.trialExpiresAt = new Date().toISOString();
-        db.saveUser(user);
-        
-        await ctx.reply(`✅ *AKSES DICABUT*\n\n👤 User: ${username} (${targetUserId})\n📋 Status: TRIAL → EXPIRED\n\nUser telah kehilangan akses trial.`);
-    } else {
-        await ctx.reply(`❌ User ${username} tidak memiliki akses aktif untuk dicabut.`);
-    }
-});
-
-// 🎁 Coba Gratis (Trial)
-tgBot.hears('🎁 Coba Gratis (Trial)', async (ctx) => {
-    const userId = ctx.from.id;
-    const user = db.getUser(userId);
-    
-    if (user && user.hadTrial) {
-        const keyboard = Markup.inlineKeyboard([
-            [Markup.button.callback('⭐ Beli Premium', 'show_packages')]
-        ]);
-        return safeReply(ctx, `❌ Anda sudah pernah menggunakan trial.\n\nSilakan beli paket premium dengan klik tombol di bawah:`, keyboard);
-    }
-    
-    const trialExpiresAt = new Date();
-    trialExpiresAt.setHours(trialExpiresAt.getHours() + TRIAL_DURATION_HOURS);
-    
-    const newUser = {
-        id: userId,
-        role: 'trial',
-        trialExpiresAt: trialExpiresAt.toISOString(),
-        hadTrial: 1,
-        notifiedExpiry: 0,
-        createdAt: new Date().toISOString()
-    };
-    
-    db.saveUser(newUser);
-    
-    await safeReply(ctx, `🎁 *TRIAL AKTIF!*\n\n${'─'.repeat(30)}\n✅ Anda mendapatkan trial ${TRIAL_DURATION_HOURS} jam\n📅 Berlaku hingga: ${formatDate(trialExpiresAt.toISOString())}\n${'─'.repeat(30)}\n\n🔧 *Fitur yang bisa digunakan:*\n• File Tools (semua)\n• Fitur WhatsApp (setelah login)\n\n💎 Setelah trial habis, silakan beli paket premium.`);
-});
-
-tgBot.action('show_packages', async (ctx) => {
-    await ctx.answerCbQuery();
-    await showPackageMenu(ctx);
-});
-
-// ❓ Bantuan
-tgBot.hears('❓ Bantuan', async (ctx) => {
-    const helpText = `🤖 *WA Kicker Bot - Bantuan*
-
-${'─'.repeat(30)}
-
-🔧 *FILE TOOLS*
-• 🔄 TXT → VCF - Convert TXT ke VCF
-• 🔄 VCF → TXT - Convert VCF ke TXT
-• 📊 XLSX → VCF - Convert Excel ke VCF
-• 📝 TXT2VCF Auto - Auto detect format
-• 🔗 Gabung TXT/VCF - Gabung multiple file
-• ✂️ Pecah VCF - Pecah file kontak
-• ➕ Tambah Kontak - Tambah ke VCF
-• ➖ Hapus Kontak - Hapus dari VCF
-• 🔢 Hitung Kontak - Hitung jumlah kontak
-• ✏️ Rename Kontak - Edit nama kontak
-
-📱 *FITUR WA* (butuh login)
-• /login - Login WhatsApp
-• /listgc - Lihat daftar grup
-• /kickmenu - Kick member grup
-• /importvcf - Import kontak ke grup
-
-⭐ *PREMIUM*
-• /beli - Beli paket premium
-• Trial 24 jam gratis!
-
-${'─'.repeat(30)}
-Ketik /done untuk selesaikan proses
-Ketik /batal untuk batalkan`;
-    
-    await safeReply(ctx, helpText);
-});
-
-// ========== FILE HANDLERS ==========
-
-// --- 1. TXT to VCF ---
+// --- 1. TXT to VCF (Multiple) ---
 async function handleCvTxtToVcfStart(ctx, userId) {
     setState(userId, { mode: 'cv_txt_to_vcf', files: [], fileNames: [], collecting: true });
-    await safeReply(ctx, `📥 *Mengumpulkan file TXT...*\n\nSetelah selesai mengirimkan File silahkan tekan /done untuk melanjutkan`);
+    await safeReply(ctx, `📥 *Mengumpulkan file TXT...*\n\nKirim file lain atau ketik /done`);
 }
 
 async function handleCvTxtToVcfFile(ctx, userId, state, doc) {
@@ -1113,10 +635,10 @@ async function finalizeCvTxtToVcf(ctx, userId, state) {
     }
 }
 
-// --- 2. VCF to TXT ---
+// --- 2. VCF to TXT (Multiple) ---
 async function handleCvVcfToTxtStart(ctx, userId) {
     setState(userId, { mode: 'cv_vcf_to_txt', files: [], fileNames: [], collecting: true });
-    await safeReply(ctx, `📥 *Mengumpulkan file VCF...*\n\nSetelah selesai mengirimkan File silahkan tekan /done untuk melanjutkan`);
+    await safeReply(ctx, `📥 *Mengumpulkan file VCF...*\n\nKirim file lain atau ketik /done`);
 }
 
 async function handleCvVcfToTxtFile(ctx, userId, state, doc) {
@@ -1231,7 +753,7 @@ async function handleCvXlsxToVcfFile(ctx, userId, state, doc) {
     }
 }
 
-// --- 4. TXT2VCF Auto ---
+// --- 4. TXT2VCF Auto-Detect ---
 async function handleTxt2VcfStart(ctx, userId) {
     setState(userId, { mode: 'txt2vcf', waiting: true });
     await safeReply(ctx, `📝 *TXT2VCF Auto-Detect*\n\nKirim file .txt untuk langsung dikonversi menjadi VCF.\n\nFormat yang didukung:\n• Nomor di depan: \`08123 Nama\`\n• Nama di depan: \`Nama 08123\`\n• Separator: \`Nama|08123\` atau \`Nama,08123\`\n• Hanya nomor: \`081234567890\`\n\nKetik /batal untuk membatalkan.`);
@@ -1266,7 +788,7 @@ async function handleTxt2VcfFile(ctx, userId, state, doc) {
 // --- 5. Gabung TXT ---
 async function handleGabungTxtStart(ctx, userId) {
     setState(userId, { mode: 'gabungtxt', files: [], fileNames: [], collecting: true });
-    await safeReply(ctx, `📥 *Mengumpulkan file TXT...*\n\nSetelah selesai mengirimkan File silahkan tekan /done untuk melanjutkan`);
+    await safeReply(ctx, `📥 *Mengumpulkan file TXT...*\n\nKirim file lain atau ketik /done`);
 }
 
 async function handleGabungTxtFile(ctx, userId, state, doc) {
@@ -1333,7 +855,7 @@ async function finalizeGabungTxt(ctx, userId, state) {
 // --- 6. Gabung VCF ---
 async function handleGabungVcfStart(ctx, userId) {
     setState(userId, { mode: 'gabungvcf', files: [], fileNames: [], collecting: true });
-    await safeReply(ctx, `📥 *Mengumpulkan file VCF...*\n\nSetelah selesai mengirimkan File silahkan tekan /done untuk melanjutkan`);
+    await safeReply(ctx, `📥 *Mengumpulkan file VCF...*\n\nKirim file lain atau ketik /done`);
 }
 
 async function handleGabungVcfFile(ctx, userId, state, doc) {
@@ -1394,7 +916,7 @@ async function finalizeGabungVcf(ctx, userId, state) {
     }
 }
 
-// --- 7. Pecah VCF ---
+// --- 7. Pecah VCF (bagian) ---
 async function handlePecahFileStart(ctx, userId) {
     setState(userId, { mode: 'pecahfile', waiting: true });
     await safeReply(ctx, `✂️ *PECAH VCF (BAGIAN)*\n\nSilakan kirim file .vcf yang ingin dipecah.\n\nKetik /batal untuk membatalkan.`);
@@ -1430,7 +952,7 @@ async function handlePecahFileVcf(ctx, userId, state, doc) {
     }
 }
 
-// --- 8. Pecah VCF (jumlah) ---
+// --- 8. Pecah VCF (jumlah kontak) ---
 async function handlePecahCtcStart(ctx, userId, jumlah) {
     const count = Math.max(1, Math.min(10000, parseInt(jumlah) || 100));
     setState(userId, { mode: 'pecahctc', countPerFile: count, waiting: true });
@@ -2008,14 +1530,6 @@ tgBot.on('photo', async (ctx) => {
 });
 
 // ========== COMMANDS ==========
-tgBot.command('start', async (ctx) => {
-    const userId = ctx.from.id;
-    const name   = ctx.from.first_name || 'User';
-    const kb     = await getKeyboard(userId);
-
-    await safeReply(ctx, `╔══════════════════════╗\n║  ${BOT_NAME}\n╚══════════════════════╝\n\n👋 Halo ${name}!\n\nBot ini bisa:\n• Kick anggota grup WA\n• Konversi file (TXT, VCF, XLSX)\n• Gabung & pecah file kontak\n• Dan banyak lagi!\n\n🔧 *File Tools* bisa diakses semua orang.\n📱 Fitur WA butuh login & akses.\n\nPilih menu di keyboard bawah 👇`, { ...kb });
-});
-
 tgBot.command('cv_txt_to_vcf',  async (ctx) => handleCvTxtToVcfStart(ctx, ctx.from.id));
 tgBot.command('cv_vcf_to_txt',  async (ctx) => handleCvVcfToTxtStart(ctx, ctx.from.id));
 tgBot.command('cv_xlsx_to_vcf', async (ctx) => handleCvXlsxToVcfStart(ctx, ctx.from.id));
@@ -2030,8 +1544,6 @@ tgBot.command('totxt',          async (ctx) => handleTotxtStart(ctx, ctx.from.id
 tgBot.command('rekapgroup',     async (ctx) => handleRekapGroup(ctx, ctx.from.id));
 tgBot.command('renamectc',      async (ctx) => handleRenamectcStart(ctx, ctx.from.id));
 tgBot.command('cvadminfile',    async (ctx) => handleCvAdminFile(ctx, ctx.from.id));
-tgBot.command('beli',           async (ctx) => showPackageMenu(ctx));
-tgBot.command('listgc',         async (ctx) => handleListGc(ctx));
 
 tgBot.command('pecahctc', async (ctx) => {
     const args   = ctx.message.text.split(' ');
@@ -2044,6 +1556,10 @@ tgBot.command('renamefile', async (ctx) => {
     args.shift();
     const newName = args.join(' ').trim();
     await handleRenameFileStart(ctx, ctx.from.id, newName);
+});
+
+tgBot.command('listgc', async (ctx) => {
+    await handleListGc(ctx);
 });
 
 tgBot.command(['done', 'selesai'], async (ctx) => {
@@ -2076,6 +1592,14 @@ tgBot.command(['done', 'selesai'], async (ctx) => {
 tgBot.command('batal', async (ctx) => {
     clearState(ctx.from.id);
     await safeReply(ctx, '✅ Proses dibatalkan.');
+});
+
+tgBot.start(async (ctx) => {
+    const userId = ctx.from.id;
+    const name   = ctx.from.first_name || 'User';
+    const kb     = await getKeyboard(userId);
+
+    await safeReply(ctx, `╔══════════════════════╗\n║  ${BOT_NAME}\n╚══════════════════════╝\n\n👋 Halo ${name}!\n\nBot ini bisa:\n• Kick anggota grup WA\n• Konversi file (TXT, VCF, XLSX)\n• Gabung & pecah file kontak\n• Dan banyak lagi!\n\n🔧 *File Tools* bisa diakses semua orang.\n📱 Fitur WA butuh login & akses.\n\nPilih menu di keyboard bawah 👇`, { ...kb });
 });
 
 // ========== HEARS HANDLERS ==========
@@ -2346,6 +1870,721 @@ tgBot.action('vcf_cancel', async (ctx) => {
     await safeReply(ctx, '✖ Import dibatalkan.');
 });
 
+// ========== MENU HANDLERS YANG HILANG ==========
+
+// 🔑 Login WhatsApp
+tgBot.hears('🔑 Login WhatsApp', async (ctx) => {
+    const userId = ctx.from.id;
+    const session = userSessions.get(userId);
+    
+    if (session && session.loggedIn) {
+        return safeReply(ctx, '✅ Anda sudah login WhatsApp.\n\nKetik /logout jika ingin keluar.');
+    }
+    
+    if (loginLocks.has(userId)) {
+        return safeReply(ctx, '⏳ Proses login sedang berjalan. Scan QR Code yang sudah dikirim.');
+    }
+    
+    loginLocks.set(userId, Date.now());
+    
+    await safeReply(ctx, `🔐 *LOGIN WHATSAPP*\n\nBot akan mengirimkan QR Code.\n\n📱 Cara login:\n1. Buka WhatsApp\n2. Klik Menu (3 titik) → Perangkat Tertaut → Tautkan Perangkat\n3. Scan QR Code yang muncul\n\n⏳ QR Code akan dikirim dalam beberapa saat...`);
+    
+    try {
+        const { version, isLatest } = await fetchLatestBaileysVersion();
+        const { state, saveCreds } = await useMultiFileAuthState(path.join(AUTH_BASE_FOLDER, `user_${userId}`));
+        
+        const sock = makeWASocket({
+            version,
+            auth: state,
+            printQRInTerminal: false,
+            logger: pino({ level: 'silent' }),
+            browser: ['WA Kicker Bot', 'Chrome', '1.0.0']
+        });
+        
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
+            
+            if (qr) {
+                try {
+                    const qrImage = await QRCode.toBuffer(qr, { type: 'png', width: 300, margin: 2 });
+                    await ctx.replyWithPhoto({ source: qrImage }, { caption: `📱 *SCAN QR CODE INI*\n\n${'─'.repeat(30)}\n1. Buka WhatsApp\n2. Perangkat Tertaut\n3. Tautkan Perangkat\n4. Scan QR Code\n${'─'.repeat(30)}\n⏳ QR Code berlaku 2 menit` });
+                } catch (err) {
+                    await safeReply(ctx, `❌ Gagal generate QR Code: ${err.message}`);
+                }
+                return;
+            }
+            
+            if (connection === 'open') {
+                userSessions.set(userId, { sock, loggedIn: true });
+                loginLocks.delete(userId);
+                const kb = await getKeyboard(userId);
+                await safeReply(ctx, `✅ *BERHASIL LOGIN!*\n\nWhatsApp Anda sekarang terhubung.\n\nGunakan /listgc untuk melihat daftar grup.`, { ...kb });
+            }
+            
+            if (connection === 'close') {
+                loginLocks.delete(userId);
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                if (statusCode !== DisconnectReason.loggedOut) {
+                    userSessions.delete(userId);
+                    await safeReply(ctx, `⚠️ Koneksi WhatsApp terputus. Silakan /login ulang.`);
+                }
+            }
+        });
+        
+        sock.ev.on('creds.update', saveCreds);
+        
+    } catch (err) {
+        loginLocks.delete(userId);
+        log('ERROR', 'Login', err.message, err);
+        await safeReply(ctx, `❌ Gagal login: ${err.message}`);
+    }
+});
+
+// 📊 Status
+tgBot.hears('📊 Status', async (ctx) => {
+    const userId = ctx.from.id;
+    const status = await getUserStatus(userId);
+    const session = userSessions.get(userId);
+    const waStatus = session && session.loggedIn ? '✅ Terhubung' : '❌ Belum Login';
+    
+    let statusText = `📊 *STATUS BOT*\n${'─'.repeat(30)}\n`;
+    statusText += `👤 Status Akun: `;
+    
+    if (isAdmin(userId)) {
+        statusText += `👑 ADMIN\n`;
+    } else if (status === 'regular') {
+        const user = db.getUser(userId);
+        statusText += `⭐ PREMIUM\n📅 Expires: ${formatDate(user.expiresAt)}\n⏳ Sisa: ${formatCountdown(user.expiresAt)}\n`;
+    } else if (status === 'trial') {
+        const user = db.getUser(userId);
+        statusText += `🎁 TRIAL\n📅 Expires: ${formatDate(user.trialExpiresAt)}\n⏳ Sisa: ${formatCountdown(user.trialExpiresAt)}\n`;
+    } else if (status === 'expired') {
+        statusText += `⚠️ EXPIRED\n💳 Silakan /beli untuk perpanjang\n`;
+    } else if (status === 'trial_expired') {
+        statusText += `⚠️ TRIAL HABIS\n💳 Upgrade ke /beli\n`;
+    } else {
+        statusText += `❓ BELUM REGISTER\n🎁 Ketik /start atau coba trial\n`;
+    }
+    
+    statusText += `${'─'.repeat(30)}\n📱 WhatsApp: ${waStatus}\n🤖 Bot: ✅ Aktif\n📅 Server: ${formatDate(new Date().toISOString())}`;
+    
+    await safeReply(ctx, statusText);
+});
+
+// 👤 Akun Saya
+tgBot.hears('👤 Akun Saya', async (ctx) => {
+    const userId = ctx.from.id;
+    const user = db.getUser(userId);
+    
+    if (!user) {
+        return safeReply(ctx, `👤 *AKUN ANDA*\n${'─'.repeat(30)}\n❌ Belum memiliki akun.\n\n🎁 Ketik /start atau pilih 🎁 Coba Gratis (Trial)`);
+    }
+    
+    let profileText = `👤 *AKUN ANDA*\n${'─'.repeat(30)}\n`;
+    profileText += `🆔 ID: ${userId}\n`;
+    profileText += `📧 Username: @${ctx.from.username || '-'}\n`;
+    profileText += `📋 Role: `;
+    
+    if (isAdmin(userId)) profileText += `👑 ADMIN\n`;
+    else if (user.role === 'regular') profileText += `⭐ PREMIUM\n📅 Expires: ${formatDate(user.expiresAt)}\n`;
+    else if (user.role === 'trial') profileText += `🎁 TRIAL\n📅 Expires: ${formatDate(user.trialExpiresAt)}\n`;
+    else profileText += `❓ NONE\n`;
+    
+    profileText += `${'─'.repeat(30)}\n💳 Ketik /beli untuk lihat paket`;
+    
+    await safeReply(ctx, profileText);
+});
+
+// ⭐ Premium
+tgBot.hears('⭐ Premium', async (ctx) => {
+    const paymentText = `⭐ *PREMIUM PACKAGE*\n${'─'.repeat(30)}\n\n💎 *Paket Reguler*\n📅 Masa Aktif: 30 hari\n💰 Harga: ${formatRupiah(50000)}\n\n💎 *Paket Pro*\n📅 Masa Aktif: 90 hari\n💰 Harga: ${formatRupiah(120000)}\n\n💎 *Paket Lifetime*\n📅 Masa Aktif: Selamanya\n💰 Harga: ${formatRupiah(300000)}\n\n${'─'.repeat(30)}\n\n💳 *Pembayaran:*\n🏦 Bank: ${PAYMENT_BANK_NAME}\n📞 No Rek: ${PAYMENT_BANK_NUMBER}\n👤 A.n: ${PAYMENT_BANK_HOLDER}\n\n📱 Dana: ${PAYMENT_DANA}\n\n📩 Konfirmasi: ${PAYMENT_CONTACT}\n\n${'─'.repeat(30)}\nKetik /beli [paket] untuk order\nContoh: /beli 30hari`;
+    
+    await safeReply(ctx, paymentText);
+});
+
+// 📋 Pending Payment (ADMIN ONLY)
+tgBot.hears('📋 Pending Payment', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) {
+        return safeReply(ctx, '⛔ Akses ditolak. Hanya admin.');
+    }
+    
+    const payments = db.getAllPendingPayments();
+    if (payments.length === 0) {
+        return safeReply(ctx, '📋 Tidak ada payment pending.');
+    }
+    
+    let text = `📋 *PENDING PAYMENTS*\n${'─'.repeat(30)}\n`;
+    payments.forEach((p, i) => {
+        text += `${i + 1}. User: ${p.userId}\n   Paket: ${p.package}\n   Jumlah: ${formatRupiah(p.amount)}\n   Tgl: ${formatDate(p.date)}\n\n`;
+    });
+    text += `${'─'.repeat(30)}\nGunakan /confirm [userId] untuk konfirmasi`;
+    
+    await safeReply(ctx, text);
+});
+
+// 👥 User List (ADMIN ONLY)
+tgBot.hears('👥 User List', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) {
+        return safeReply(ctx, '⛔ Akses ditolak. Hanya admin.');
+    }
+    
+    const users = db.getAllUsers();
+    if (users.length === 0) {
+        return safeReply(ctx, '👥 Belum ada user terdaftar.');
+    }
+    
+    let text = `👥 *USER LIST*\n${'─'.repeat(30)}\n`;
+    users.forEach((u, i) => {
+        const role = u.role === 'regular' ? '⭐' : u.role === 'trial' ? '🎁' : '❓';
+        const expiry = u.role === 'regular' ? formatDate(u.expiresAt) : u.role === 'trial' ? formatDate(u.trialExpiresAt) : '-';
+        text += `${i + 1}. ${role} ${u.id}\n   Exp: ${expiry}\n\n`;
+    });
+    text += `${'─'.repeat(30)}\nTotal: ${users.length} user`;
+    
+    if (text.length > 4000) {
+        const buffer = Buffer.from(text, 'utf-8');
+        await sendFile(ctx, buffer, 'user_list.txt', '📋 Daftar user');
+    } else {
+        await safeReply(ctx, text);
+    }
+});
+
+// 🚪 Logout WhatsApp
+tgBot.hears('🚪 Logout WhatsApp', async (ctx) => {
+    const userId = ctx.from.id;
+    const session = userSessions.get(userId);
+    
+    if (!session || !session.loggedIn) {
+        return safeReply(ctx, '❌ Anda belum login WhatsApp.');
+    }
+    
+    try {
+        await session.sock.logout();
+    } catch (err) {}
+    
+    userSessions.delete(userId);
+    const kb = await getKeyboard(userId);
+    await safeReply(ctx, `✅ *LOGOUT BERHASIL*\n\nWhatsApp telah diputus.\n\nKetik /login untuk login kembali.`, { ...kb });
+});
+
+// ========== SISTEM PREMIUM OTOMATIS ==========
+
+// Menu paket yang ditawarkan
+async function showPackages(ctx, userId) {
+    const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('💎 Paket Reguler (30 hari) - Rp 50.000', 'order_reguler')],
+        [Markup.button.callback('💎 Paket Pro (90 hari) - Rp 120.000', 'order_pro')],
+        [Markup.button.callback('💎 Paket Lifetime (Selamanya) - Rp 300.000', 'order_lifetime')],
+        [Markup.button.callback('❌ Batal', 'cancel_order')]
+    ]);
+    
+    await safeReply(ctx, `⭐ *PILIH PAKET PREMIUM*\n\n${'─'.repeat(30)}\n💎 *Paket Reguler*\n📅 30 hari\n💰 Rp 50.000\n\n💎 *Paket Pro*\n📅 90 hari\n💰 Rp 120.000\n\n💎 *Paket Lifetime*\n📅 Selamanya\n💰 Rp 300.000\n${'─'.repeat(30)}\n\nPilih paket yang ingin dibeli:`, { ...keyboard });
+}
+
+// Handler order paket
+tgBot.action('order_reguler', async (ctx) => {
+    await ctx.answerCbQuery();
+    const userId = ctx.from.id;
+    const username = ctx.from.username || ctx.from.first_name || 'User';
+    
+    // Simpan pending order
+    const order = {
+        userId: userId,
+        username: username,
+        package: 'Reguler',
+        duration: 30,
+        price: 50000,
+        date: new Date().toISOString(),
+        status: 'pending'
+    };
+    
+    db.addPendingPayment(order);
+    
+    // Kirim instruksi pembayaran ke user
+    await safeReply(ctx, `✅ *ORDER DITERIMA!*\n\n${'─'.repeat(30)}\n📦 Paket: Reguler (30 hari)\n💰 Total: Rp 50.000\n${'─'.repeat(30)}\n\n💳 *INSTRUKSI PEMBAYARAN:*\n🏦 Bank: ${PAYMENT_BANK_NAME}\n📞 No Rek: ${PAYMENT_BANK_NUMBER}\n👤 A.n: ${PAYMENT_BANK_HOLDER}\n📱 Dana: ${PAYMENT_DANA}\n\n📩 *KONFIRMASI SETELAH BAYAR:*\nKirim bukti transfer ke: ${PAYMENT_CONTACT}\n\n⏳ Admin akan memproses setelah pembayaran dikonfirmasi.`);
+    
+    // Kirim notifikasi ke semua admin
+    for (const adminId of ADMIN_IDS) {
+        try {
+            const adminKeyboard = Markup.inlineKeyboard([
+                [Markup.button.callback('✅ Approve', `approve_${userId}_reguler`), Markup.button.callback('❌ Reject', `reject_${userId}`)]
+            ]);
+            await tgBot.telegram.sendMessage(adminId, `🛒 *ORDER BARU!*\n\n${'─'.repeat(30)}\n👤 User: @${username} (${userId})\n📦 Paket: Reguler (30 hari)\n💰 Harga: Rp 50.000\n📅 Tanggal: ${formatDate(new Date().toISOString())}\n${'─'.repeat(30)}\n\nKlik tombol di bawah untuk memproses:`, { ...adminKeyboard });
+        } catch (err) {
+            log('ERROR', 'Order', `Gagal kirim notifikasi ke admin ${adminId}: ${err.message}`);
+        }
+    }
+});
+
+tgBot.action('order_pro', async (ctx) => {
+    await ctx.answerCbQuery();
+    const userId = ctx.from.id;
+    const username = ctx.from.username || ctx.from.first_name || 'User';
+    
+    const order = {
+        userId: userId,
+        username: username,
+        package: 'Pro',
+        duration: 90,
+        price: 120000,
+        date: new Date().toISOString(),
+        status: 'pending'
+    };
+    
+    db.addPendingPayment(order);
+    
+    await safeReply(ctx, `✅ *ORDER DITERIMA!*\n\n${'─'.repeat(30)}\n📦 Paket: Pro (90 hari)\n💰 Total: Rp 120.000\n${'─'.repeat(30)}\n\n💳 *INSTRUKSI PEMBAYARAN:*\n🏦 Bank: ${PAYMENT_BANK_NAME}\n📞 No Rek: ${PAYMENT_BANK_NUMBER}\n👤 A.n: ${PAYMENT_BANK_HOLDER}\n📱 Dana: ${PAYMENT_DANA}\n\n📩 *KONFIRMASI SETELAH BAYAR:*\nKirim bukti transfer ke: ${PAYMENT_CONTACT}\n\n⏳ Admin akan memproses setelah pembayaran dikonfirmasi.`);
+    
+    for (const adminId of ADMIN_IDS) {
+        try {
+            const adminKeyboard = Markup.inlineKeyboard([
+                [Markup.button.callback('✅ Approve', `approve_${userId}_pro`), Markup.button.callback('❌ Reject', `reject_${userId}`)]
+            ]);
+            await tgBot.telegram.sendMessage(adminId, `🛒 *ORDER BARU!*\n\n${'─'.repeat(30)}\n👤 User: @${username} (${userId})\n📦 Paket: Pro (90 hari)\n💰 Harga: Rp 120.000\n📅 Tanggal: ${formatDate(new Date().toISOString())}\n${'─'.repeat(30)}\n\nKlik tombol di bawah untuk memproses:`, { ...adminKeyboard });
+        } catch (err) {}
+    }
+});
+
+tgBot.action('order_lifetime', async (ctx) => {
+    await ctx.answerCbQuery();
+    const userId = ctx.from.id;
+    const username = ctx.from.username || ctx.from.first_name || 'User';
+    
+    const order = {
+        userId: userId,
+        username: username,
+        package: 'Lifetime',
+        duration: 36500,
+        price: 300000,
+        date: new Date().toISOString(),
+        status: 'pending'
+    };
+    
+    db.addPendingPayment(order);
+    
+    await safeReply(ctx, `✅ *ORDER DITERIMA!*\n\n${'─'.repeat(30)}\n📦 Paket: Lifetime (Selamanya)\n💰 Total: Rp 300.000\n${'─'.repeat(30)}\n\n💳 *INSTRUKSI PEMBAYARAN:*\n🏦 Bank: ${PAYMENT_BANK_NAME}\n📞 No Rek: ${PAYMENT_BANK_NUMBER}\n👤 A.n: ${PAYMENT_BANK_HOLDER}\n📱 Dana: ${PAYMENT_DANA}\n\n📩 *KONFIRMASI SETELAH BAYAR:*\nKirim bukti transfer ke: ${PAYMENT_CONTACT}\n\n⏳ Admin akan memproses setelah pembayaran dikonfirmasi.`);
+    
+    for (const adminId of ADMIN_IDS) {
+        try {
+            const adminKeyboard = Markup.inlineKeyboard([
+                [Markup.button.callback('✅ Approve', `approve_${userId}_lifetime`), Markup.button.callback('❌ Reject', `reject_${userId}`)]
+            ]);
+            await tgBot.telegram.sendMessage(adminId, `🛒 *ORDER BARU!*\n\n${'─'.repeat(30)}\n👤 User: @${username} (${userId})\n📦 Paket: Lifetime (Selamanya)\n💰 Harga: Rp 300.000\n📅 Tanggal: ${formatDate(new Date().toISOString())}\n${'─'.repeat(30)}\n\nKlik tombol di bawah untuk memproses:`, { ...adminKeyboard });
+        } catch (err) {}
+    }
+});
+
+// Approve payment
+tgBot.action(/^approve_(\d+)_(reguler|pro|lifetime)$/, async (ctx) => {
+    if (!isAdmin(ctx.from.id)) {
+        await ctx.answerCbQuery('⛔ Hanya admin!');
+        return;
+    }
+    
+    await ctx.answerCbQuery('✅ Approving...');
+    const userId = parseInt(ctx.match[1]);
+    const packageType = ctx.match[2];
+    
+    let duration = 0;
+    let role = 'regular';
+    
+    if (packageType === 'reguler') {
+        duration = 30;
+    } else if (packageType === 'pro') {
+        duration = 90;
+    } else if (packageType === 'lifetime') {
+        duration = 36500;
+    }
+    
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + duration);
+    
+    const userData = {
+        id: userId,
+        role: role,
+        package: packageType,
+        expiresAt: expiresAt.toISOString(),
+        hadTrial: true,
+        notifiedExpiry: false,
+        updatedAt: new Date().toISOString()
+    };
+    
+    db.saveUser(userData);
+    db.removePendingPayment(userId);
+    
+    await ctx.editMessageText(`✅ *ORDER DISETUJUI!*\n\nUser ${userId} telah diaktifkan paket ${packageType}.\nBerlaku sampai: ${formatDate(expiresAt.toISOString())}`);
+    
+    try {
+        await tgBot.telegram.sendMessage(userId, `✅ *PEMBAYARAN DISETUJUI!*\n\n${'─'.repeat(30)}\n📦 Paket: ${packageType}\n📅 Berlaku sampai: ${formatDate(expiresAt.toISOString())}\n${'─'.repeat(30)}\n\nTerima kasih! Gunakan /start untuk mulai.`);
+    } catch (err) {}
+});
+
+// Reject payment
+tgBot.action(/^reject_(\d+)$/, async (ctx) => {
+    if (!isAdmin(ctx.from.id)) {
+        await ctx.answerCbQuery('⛔ Hanya admin!');
+        return;
+    }
+    
+    await ctx.answerCbQuery('❌ Rejecting...');
+    const userId = parseInt(ctx.match[1]);
+    
+    db.removePendingPayment(userId);
+    
+    await ctx.editMessageText(`❌ *ORDER DITOLAK!*\n\nUser ${userId} - Silakan hubungi admin.`);
+    
+    try {
+        await tgBot.telegram.sendMessage(userId, `❌ *PEMBAYARAN DITOLAK!*\n\nSilakan hubungi admin untuk info lebih lanjut.\n📩 Kontak: ${PAYMENT_CONTACT}`);
+    } catch (err) {}
+});
+
+tgBot.action('cancel_order', async (ctx) => {
+    await ctx.answerCbQuery('Dibatalkan');
+    await ctx.editMessageText('✖ Pemesanan dibatalkan.');
+});
+
+// Tombol beli premium dari menu
+tgBot.hears('⭐ Premium', async (ctx) => {
+    await showPackages(ctx, ctx.from.id);
+});
+
+// Command /beli
+tgBot.command('beli', async (ctx) => {
+    await showPackages(ctx, ctx.from.id);
+});
+
+// ========== USER LIST DENGAN NAMA USER + REVOKE ==========
+tgBot.hears('👥 User List', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) {
+        return safeReply(ctx, '⛔ Akses ditolak. Hanya admin.');
+    }
+    
+    const users = db.getAllUsers();
+    if (users.length === 0) {
+        return safeReply(ctx, '👥 Belum ada user terdaftar.');
+    }
+    
+    // Buat tombol untuk setiap user
+    const buttons = [];
+    for (const u of users) {
+        const username = u.username || u.id;
+        buttons.push([Markup.button.callback(`👤 ${username} (${u.role})`, `userinfo_${u.id}`)]);
+    }
+    buttons.push([Markup.button.callback('❌ Tutup', 'close_userlist')]);
+    
+    await safeReply(ctx, `👥 *DAFTAR USER*\n\nKlik nama user untuk melihat detail dan opsi revoke:`, {
+        reply_markup: { inline_keyboard: buttons }
+    });
+});
+
+// Detail user + tombol revoke
+tgBot.action(/^userinfo_(\d+)$/, async (ctx) => {
+    if (!isAdmin(ctx.from.id)) {
+        await ctx.answerCbQuery('⛔ Hanya admin!');
+        return;
+    }
+    
+    const userId = parseInt(ctx.match[1]);
+    const user = db.getUser(userId);
+    
+    if (!user) {
+        await ctx.answerCbQuery('User tidak ditemukan');
+        return;
+    }
+    
+    // Coba dapatkan username dari Telegram
+    let username = 'Unknown';
+    try {
+        const chat = await tgBot.telegram.getChat(userId);
+        username = chat.username || chat.first_name || userId;
+    } catch (err) {}
+    
+    const expiryDate = user.role === 'regular' ? formatDate(user.expiresAt) : user.role === 'trial' ? formatDate(user.trialExpiresAt) : '-';
+    const roleIcon = user.role === 'regular' ? '⭐' : user.role === 'trial' ? '🎁' : '❓';
+    
+    const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('🔴 Revoke Akses', `revoke_${userId}`)],
+        [Markup.button.callback('↩️ Kembali ke daftar', 'back_userlist')]
+    ]);
+    
+    await ctx.editMessageText(`👤 *DETAIL USER*\n${'─'.repeat(30)}\n🆔 ID: ${userId}\n📛 Nama: @${username}\n📋 Role: ${roleIcon} ${user.role}\n📅 Expires: ${expiryDate}\n${'─'.repeat(30)}\n\n⚠️ *Revoke akan menghapus akses user!*`, { ...keyboard });
+});
+
+// Revoke akses user
+tgBot.action(/^revoke_(\d+)$/, async (ctx) => {
+    if (!isAdmin(ctx.from.id)) {
+        await ctx.answerCbQuery('⛔ Hanya admin!');
+        return;
+    }
+    
+    await ctx.answerCbQuery('🔴 Revoking...');
+    const userId = parseInt(ctx.match[1]);
+    const user = db.getUser(userId);
+    
+    if (!user) {
+        await ctx.editMessageText('❌ User tidak ditemukan.');
+        return;
+    }
+    
+    // Hapus user dari database
+    db.deleteUser(userId);
+    
+    // Hapus sesi WA jika ada
+    if (userSessions.has(userId)) {
+        const session = userSessions.get(userId);
+        if (session?.sock) {
+            try {
+                await session.sock.logout();
+            } catch (err) {}
+        }
+        userSessions.delete(userId);
+    }
+    
+    await ctx.editMessageText(`✅ *REVOKE BERHASIL!*\n\nAkses user @${user.username || userId} telah dicabut.\nUser akan diarahkan ke menu landing.`);
+    
+    try {
+        await tgBot.telegram.sendMessage(userId, `🔴 *AKSES ANDA DICABUT!*\n\nHubungi admin untuk info lebih lanjut.\n📩 Kontak: ${PAYMENT_CONTACT}`);
+    } catch (err) {}
+});
+
+// Kembali ke daftar user
+tgBot.action('back_userlist', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    
+    const users = db.getAllUsers();
+    if (users.length === 0) {
+        await ctx.editMessageText('👥 Belum ada user terdaftar.');
+        return;
+    }
+    
+    const buttons = [];
+    for (const u of users) {
+        const username = u.username || u.id;
+        buttons.push([Markup.button.callback(`👤 ${username} (${u.role})`, `userinfo_${u.id}`)]);
+    }
+    buttons.push([Markup.button.callback('❌ Tutup', 'close_userlist')]);
+    
+    await ctx.editMessageText(`👥 *DAFTAR USER*\n\nKlik nama user untuk melihat detail dan opsi revoke:`, {
+        reply_markup: { inline_keyboard: buttons }
+    });
+});
+
+tgBot.action('close_userlist', async (ctx) => {
+    await ctx.deleteMessage();
+});
+
+// Command /revoke (manual via command)
+tgBot.command('revoke', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) {
+        return safeReply(ctx, '⛔ Hanya admin!');
+    }
+    
+    const args = ctx.message.text.split(' ');
+    if (args.length < 2) {
+        return safeReply(ctx, `📋 *CARA REVOKE*\n\n/revoke [user_id]\n\nContoh: /revoke 123456789`);
+    }
+    
+    const userId = parseInt(args[1]);
+    if (isNaN(userId)) {
+        return safeReply(ctx, '❌ ID user tidak valid.');
+    }
+    
+    const user = db.getUser(userId);
+    if (!user) {
+        return safeReply(ctx, `❌ User dengan ID ${userId} tidak ditemukan.`);
+    }
+    
+    db.deleteUser(userId);
+    
+    if (userSessions.has(userId)) {
+        const session = userSessions.get(userId);
+        if (session?.sock) {
+            try {
+                await session.sock.logout();
+            } catch (err) {}
+        }
+        userSessions.delete(userId);
+    }
+    
+    await safeReply(ctx, `✅ *REVOKE BERHASIL!*\n\nAkses user ID: ${userId} telah dicabut.`);
+    
+    try {
+        await tgBot.telegram.sendMessage(userId, `🔴 *AKSES ANDA DICABUT!*\n\nHubungi admin untuk info lebih lanjut.\n📩 Kontak: ${PAYMENT_CONTACT}`);
+    } catch (err) {}
+});
+
+// ========== PERBAIKAN MENU BANTUAN ==========
+tgBot.hears('❓ Bantuan', async (ctx) => {
+    const helpText = `🤖 *WA KICKER BOT - PANDUAN LENGKAP*
+
+${'─'.repeat(30)}
+
+🔧 *FILE TOOLS* (Bisa diakses semua)
+• 🔄 TXT → VCF - Konversi TXT ke VCF
+• 🔄 VCF → TXT - Konversi VCF ke TXT  
+• 📊 XLSX → VCF - Konversi Excel ke VCF
+• 📝 TXT2VCF Auto - Auto detect format
+• 🔗 Gabung TXT - Gabung multiple TXT
+• 🔗 Gabung VCF - Gabung multiple VCF
+• ✂️ Pecah VCF - Pecah per bagian
+• ✂️ Pecah VCF (jlh) - Pecah per jumlah
+• ➕ Tambah Kontak - Tambah kontak ke VCF
+• ➖ Hapus Kontak - Hapus kontak dari VCF
+• 🔢 Hitung Kontak - Hitung jumlah kontak
+• ✏️ Rename Kontak - Rename semua kontak
+• 📝 Rename File - Rename file
+• 📄 Pesan ke TXT - Simpan pesan ke TXT
+• 📸 Rekap Grup - Rekap grup dari foto
+
+${'─'.repeat(30)}
+
+📱 *FITUR WA* (Perlu login)
+• 🔑 Login WhatsApp - Scan QR Code
+• 📋 List Grup WA - Lihat daftar grup
+• 🎯 Pilih Grup - Pilih target grup
+• ➕ Buat Grup WA - Buat grup baru
+• 📥 Import VCF - Import kontak ke grup
+• 🔴 Kick Menu - Kick anggota grup
+• 🚪 Logout WhatsApp - Keluar dari WA
+
+${'─'.repeat(30)}
+
+⭐ *PREMIUM*
+• /beli - Lihat paket premium
+• Paket Reguler (30 hari) - Rp 50.000
+• Paket Pro (90 hari) - Rp 120.000
+• Paket Lifetime (Selamanya) - Rp 300.000
+
+${'─'.repeat(30)}
+
+📋 *PERINTAH DASAR*
+• /start - Mulai bot
+• /done - Selesaikan proses
+• /batal - Batalkan proses
+• /beli - Beli premium
+• /help - Bantuan ini
+
+${'─'.repeat(30)}
+
+💳 *PEMBAYARAN*
+🏦 Bank: ${PAYMENT_BANK_NAME}
+📞 No Rek: ${PAYMENT_BANK_NUMBER}
+👤 A.n: ${PAYMENT_BANK_HOLDER}
+📱 Dana: ${PAYMENT_DANA}
+📩 Konfirmasi: ${PAYMENT_CONTACT}
+
+${'─'.repeat(30)}
+
+⚠️ *CARA PENGGUNAAN FILE TOOLS*
+1. Pilih menu (contoh: 🔗 Gabung TXT)
+2. Kirim file satu per satu
+3. Setelah selesai, ketik /done
+4. Bot akan proses dan kirim hasil
+
+❓ Ada pertanyaan? Hubungi admin: ${PAYMENT_CONTACT}`;
+
+    await safeReply(ctx, helpText);
+});
+
+// Command /help
+tgBot.command('help', async (ctx) => {
+    const helpText = `🤖 *WA KICKER BOT - PANDUAN LENGKAP*
+
+${'─'.repeat(30)}
+
+🔧 *FILE TOOLS* (Bisa diakses semua)
+• 🔄 TXT → VCF - Konversi TXT ke VCF
+• 🔄 VCF → TXT - Konversi VCF ke TXT  
+• 📊 XLSX → VCF - Konversi Excel ke VCF
+• 📝 TXT2VCF Auto - Auto detect format
+• 🔗 Gabung TXT - Gabung multiple TXT
+• 🔗 Gabung VCF - Gabung multiple VCF
+• ✂️ Pecah VCF - Pecah per bagian
+• ✂️ Pecah VCF (jlh) - Pecah per jumlah
+• ➕ Tambah Kontak - Tambah kontak ke VCF
+• ➖ Hapus Kontak - Hapus kontak dari VCF
+• 🔢 Hitung Kontak - Hitung jumlah kontak
+• ✏️ Rename Kontak - Rename semua kontak
+• 📝 Rename File - Rename file
+• 📄 Pesan ke TXT - Simpan pesan ke TXT
+• 📸 Rekap Grup - Rekap grup dari foto
+
+${'─'.repeat(30)}
+
+📱 *FITUR WA* (Perlu login)
+• 🔑 Login WhatsApp - Scan QR Code
+• 📋 List Grup WA - Lihat daftar grup
+• 🎯 Pilih Grup - Pilih target grup
+• ➕ Buat Grup WA - Buat grup baru
+• 📥 Import VCF - Import kontak ke grup
+• 🔴 Kick Menu - Kick anggota grup
+• 🚪 Logout WhatsApp - Keluar dari WA
+
+${'─'.repeat(30)}
+
+⭐ *PREMIUM*
+• /beli - Lihat paket premium
+
+${'─'.repeat(30)}
+
+📋 *PERINTAH DASAR*
+• /start - Mulai bot
+• /done - Selesaikan proses
+• /batal - Batalkan proses
+• /beli - Beli premium
+• /help - Bantuan ini
+
+${'─'.repeat(30)}
+
+⚠️ *CARA PENGGUNAAN*
+1. Pilih menu file tools
+2. Kirim file
+3. Ketik /done
+4. Hasil akan dikirim
+
+❓ Pertanyaan? Hubungi admin: ${PAYMENT_CONTACT}`;
+
+    await safeReply(ctx, helpText);
+});
+
+// ========== HELP ==========
+tgBot.command('help', async (ctx) => {
+    const helpText = [
+        '🤖 WA Kicker Bot - Panduan',
+        '',
+        '🔧 FILE TOOLS (bisa diakses semua):',
+        '/cv_txt_to_vcf - Convert TXT ke VCF',
+        '/cv_vcf_to_txt - Convert VCF ke TXT',
+        '/cv_xlsx_to_vcf - Convert XLSX ke VCF',
+        '/txt2vcf - TXT ke VCF auto-detect',
+        '/gabungtxt - Gabung multiple TXT',
+        '/gabungvcf - Gabung multiple VCF',
+        '/pecahfile - Pecah VCF per bagian',
+        '/pecahctc [n] - Pecah VCF per jumlah kontak',
+        '/addctc - Tambah kontak ke VCF',
+        '/delctc - Hapus kontak dari VCF',
+        '/hitungctc - Hitung kontak VCF',
+        '/renamectc - Rename kontak VCF',
+        '/renamefile [nama] - Rename file',
+        '/totxt - Simpan pesan ke TXT',
+        '/rekapgroup - Rekap grup dari foto',
+        '',
+        '📱 FITUR WA (perlu login & akses):',
+        '/login - Login WhatsApp',
+        '/listgc - List semua grup',
+        '/groups - Lihat grup WA',
+        '/select - Pilih grup',
+        '/buatgrup - Buat grup WA',
+        '/importvcf - Import VCF ke grup',
+        '/kickmenu - Kick anggota grup',
+        '',
+        'Ketik /done untuk selesaikan proses.',
+        'Ketik /batal untuk batalkan.'
+    ].join('\n');
+
+    await safeReply(ctx, helpText);
+});
+
 // ========== HEALTH CHECK ==========
 const PORT = process.env.PORT || 8080;
 http.createServer((req, res) => {
@@ -2355,7 +2594,7 @@ http.createServer((req, res) => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
             status:    'ok',
-            bot:       'WA Kicker Bot v7.0.0',
+            bot:       'WA Kicker Bot v6.3.0',
             uptime:    Math.floor(process.uptime()) + 's',
             timestamp: new Date().toISOString(),
             sessions:  userSessions.size,
@@ -2409,19 +2648,21 @@ process.on('uncaughtException', (err) => {
 
 tgBot.launch().then(() => {
     console.log('\n╔══════════════════════════════════════════╗');
-    console.log('║  WA KICKER BOT v7.0.0 - PREMIUM READY   ║');
-    console.log('║  ALL FEATURES WORKING                    ║');
+    console.log('║  WA KICKER BOT v6.3.0 - ALL FIXED       ║');
+    console.log('║  NO-SPAM + XLSX SUPPORT                  ║');
     console.log('╚══════════════════════════════════════════╝\n');
     console.log(`📋 Admin IDs  : ${ADMIN_IDS.join(', ')}`);
     console.log(`📁 Data dir   : ${DATA_DIR}`);
     console.log(`📦 Max file   : ${MAX_FILE_SIZE_MB}MB`);
     console.log(`👥 Max kontak : ${MAX_CONTACTS_PER_FILE.toLocaleString()}/file`);
     console.log(`⏱️  DL timeout : ${DOWNLOAD_TIMEOUT_MS / 1000}s`);
-    console.log(`\n✨ FITUR AKTIF:`);
-    console.log(`   - Premium System (3 paket dengan tombol)`);
-    console.log(`   - User List dengan Username & Revoke`);
-    console.log(`   - Pending Payment dengan Approve/Reject`);
-    console.log(`   - File Tools (NO-SPAM)`);
+    console.log(`\n✨ SEMUA FITUR SUDAH DI-FIX:`);
+    console.log(`   - TXT → VCF (NO-SPAM)`);
+    console.log(`   - VCF → TXT (NO-SPAM)`);
+    console.log(`   - GABUNG TXT/VCF (NO-SPAM)`);
+    console.log(`   - PECAH VCF (NO-SPAM)`);
+    console.log(`   - TAMBAH/HAPUS KONTAK (NO-SPAM)`);
+    console.log(`   - RENAME KONTAK (NO-SPAM)`);
     console.log(`   - XLSX → VCF: ${XLSX ? '✅ AKTIF' : '❌ INSTALL xlsx'}`);
     console.log(`\n🚀 Bot siap digunakan!\n`);
 }).catch(err => {
